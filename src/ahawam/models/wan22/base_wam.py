@@ -600,6 +600,31 @@ class BaseWAM(torch.nn.Module, ABC):
                     f"got {tuple(action_is_pad.shape)} vs expected ({batch_size}, {action_horizon})"
                 )
 
+        action_dim_mask = sample.get("action_dim_mask", None)
+        if action_dim_mask is None and "action_dim_is_pad" in sample:
+            dim_is_pad = sample["action_dim_is_pad"]
+            if dim_is_pad.ndim == 1:
+                dim_is_pad = dim_is_pad.unsqueeze(0).expand(batch_size, -1)
+            if dim_is_pad.ndim != 2:
+                raise ValueError(
+                    "`sample['action_dim_is_pad']` must be [A] or [B,A], "
+                    f"got shape {tuple(dim_is_pad.shape)}"
+                )
+            action_dim_mask = (~dim_is_pad.bool()).unsqueeze(1).expand(
+                batch_size, action_horizon, -1
+            )
+        if action_dim_mask is not None:
+            if action_dim_mask.ndim != 3:
+                raise ValueError(
+                    "`sample['action_dim_mask']` must be 3D [B, T, A], "
+                    f"got shape {tuple(action_dim_mask.shape)}"
+                )
+            if tuple(action_dim_mask.shape) != tuple(action.shape):
+                raise ValueError(
+                    "`sample['action_dim_mask']` shape mismatch: "
+                    f"got {tuple(action_dim_mask.shape)} vs expected {tuple(action.shape)}"
+                )
+
         image_is_pad = sample.get("image_is_pad", None)
         if image_is_pad is not None:
             if image_is_pad.ndim != 2:
@@ -668,6 +693,10 @@ class BaseWAM(torch.nn.Module, ABC):
             action_is_pad = action_is_pad.to(
                 device=self.device, dtype=torch.bool, non_blocking=True
             )
+        if action_dim_mask is not None:
+            action_dim_mask = action_dim_mask.to(
+                device=self.device, dtype=torch.bool, non_blocking=True
+            )
         if image_is_pad is not None:
             image_is_pad = image_is_pad.to(
                 device=self.device, dtype=torch.bool, non_blocking=True
@@ -681,6 +710,7 @@ class BaseWAM(torch.nn.Module, ABC):
             "fuse_vae_embedding_in_latents": fuse_flag,
             "action": action,
             "action_is_pad": action_is_pad,
+            "action_dim_mask": action_dim_mask,
             "image_is_pad": image_is_pad,
         }
 

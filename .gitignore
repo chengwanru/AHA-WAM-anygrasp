@@ -1,8 +1,9 @@
 
 # Misc
 outputs/
-checkpoints
-data/*
+/checkpoints/
+/data/
+/datasets/
 apex/
 assets/*
 !assets/teaser.png
@@ -21,6 +22,9 @@ evaluate_results/
 # Data types
 *.jit
 *.pt
+*.pth
+*.ckpt
+*.safetensors
 *.hdr
 *.webp
 *.pgm
@@ -32,6 +36,11 @@ evaluate_results/
 *.pkl
 *.pt
 *.bin
+*.npy
+*.npz
+*.h5
+*.hdf5
+*.parquet
 *.pickle
 *.txt
 
@@ -233,13 +242,17 @@ envs.txt
 manifest.json
 
 
-# locks and t5 temp files
+# locks, model downloads, and generated embedding/latent caches
 *.locks*
 *.no_exist*
 *models--t5*
-
-!data/fastwam_model_hf_release/libero_uncond_2cam224.pt
-!data/fastwam_model_hf_release/robotwin_uncond_3cam_384.pt
+text_embeds/
+text_embeds_cache/
+text_embedding_cache/
+ahawam_text_embeds/
+video_latents/
+video_latent_cache/
+latents/
 
 # OneLogger
 wandb/

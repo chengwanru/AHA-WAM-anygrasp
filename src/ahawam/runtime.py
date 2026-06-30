@@ -196,6 +196,8 @@ def create_ahawam(
     mot_checkpoint_mixed_attn: bool = True,
     redirect_common_files: bool = True,
     checkpoint_shape_adapt: bool = False,
+    checkpoint_partial_load: bool = False,
+    checkpoint_denylist=None,
     model_dtype: torch.dtype = torch.bfloat16,
     device: str = "cuda",
 ):
@@ -301,6 +303,11 @@ def create_ahawam(
         )
     model.max_action_offset = max_action_offset
     model.checkpoint_shape_adapt = bool(checkpoint_shape_adapt)
+    model.checkpoint_partial_load = bool(checkpoint_partial_load)
+    if checkpoint_denylist is not None:
+        if isinstance(checkpoint_denylist, DictConfig):
+            checkpoint_denylist = OmegaConf.to_container(checkpoint_denylist, resolve=True)
+        model.checkpoint_denylist = [str(item) for item in checkpoint_denylist]
     return model
 
 

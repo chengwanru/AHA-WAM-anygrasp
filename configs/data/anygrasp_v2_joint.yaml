@@ -1,0 +1,53 @@
+train:
+  _target_: ahawam.datasets.anygrasp_v2_lerobot.AnyGraspV2LeRobotDataset
+  dataset_dirs:
+    - /mnt/pfs/mory2i/Data/anygrasp/task_*/batch_*
+  marmalade_src_path: /root/workspace/marmalade/src
+  main_camera_key: observation.images.top
+  action_stats_path: /mnt/pfs/mory2i/Data/fourier-data/action_stats_joint.json
+  text_embedding_cache_dir: /mnt/pfs/mory2i/cache/ahawam_text_embeds/anygrasp_v2_joint
+  context_len: 128
+  prompt_field: expand_task
+  video_size: [256, 448]
+  video_window_frames: 65
+  video_sampled_frames: [0, 8, 16, 24, 32, 40, 48, 56, 64]
+  video_stride_frames: 4
+  video_fps: 30
+  action_rate_hz: 30.0
+  action_horizon: 64
+  action_history_seconds: 0.0
+  action_window_alignment: frame_intervals
+  state_context_steps: 64
+  video_backend: pyav
+  val_set_proportion: 0.01
+  is_training_set: true
+  seed: ${seed}
+  decode_device: cpu
+  max_padding_retry: 5
+
+val:
+  _target_: ahawam.datasets.anygrasp_v2_lerobot.AnyGraspV2LeRobotDataset
+  dataset_dirs:
+    - /mnt/pfs/mory2i/Data/anygrasp/task_*/batch_*
+  marmalade_src_path: /root/workspace/marmalade/src
+  main_camera_key: observation.images.top
+  action_stats_path: /mnt/pfs/mory2i/Data/fourier-data/action_stats_joint.json
+  text_embedding_cache_dir: /mnt/pfs/mory2i/cache/ahawam_text_embeds/anygrasp_v2_joint
+  context_len: 128
+  prompt_field: expand_task
+  video_size: [256, 448]
+  video_window_frames: 65
+  video_sampled_frames: [0, 8, 16, 24, 32, 40, 48, 56, 64]
+  video_stride_frames: 4
+  video_fps: 30
+  action_rate_hz: 30.0
+  action_horizon: 64
+  action_history_seconds: 0.0
+  action_window_alignment: frame_intervals
+  state_context_steps: 64
+  video_backend: pyav
+  val_set_proportion: 0.01
+  is_training_set: false
+  seed: ${seed}
+  decode_device: cpu
+  max_padding_retry: 5

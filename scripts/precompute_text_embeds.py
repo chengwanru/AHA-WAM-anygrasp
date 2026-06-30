@@ -67,8 +67,15 @@ def _iter_dataset_nodes(node: Any, path: str = "data"):
             yield from _iter_dataset_nodes(value, f"{path}[{idx}]")
 
 
+def _expand_dataset_dir(pattern: str) -> list[str]:
+    import glob
+
+    matches = sorted(glob.glob(str(pattern)))
+    return matches or [str(pattern)]
+
+
 def _collect_dataset_settings(data_cfg: DictConfig):
-    dataset_dirs: list[str] = []
+    dataset_specs: list[tuple[str, str]] = []
     cache_dirs: list[Path] = []
     context_lens = set()
 
@@ -84,10 +91,12 @@ def _collect_dataset_settings(data_cfg: DictConfig):
                 "(this node defines `dataset_dirs`)."
             )
 
+        prompt_field = str(node.get("prompt_field", "task"))
         for ds in raw_dirs:
-            ds_str = str(ds)
-            if ds_str not in dataset_dirs:
-                dataset_dirs.append(ds_str)
+            for ds_str in _expand_dataset_dir(str(ds)):
+                spec = (ds_str, prompt_field)
+                if spec not in dataset_specs:
+                    dataset_specs.append(spec)
 
         cache_dir_path = Path(str(cache_dir)).expanduser()
         if cache_dir_path not in cache_dirs:
@@ -97,9 +106,14 @@ def _collect_dataset_settings(data_cfg: DictConfig):
         if context_len is not None:
             context_lens.add(int(context_len))
 
-        logger.info("Discovered dataset node `%s` with %d dataset_dirs.", node_path, len(raw_dirs))
+        logger.info(
+            "Discovered dataset node `%s` with %d dataset_dirs, prompt_field=%s.",
+            node_path,
+            len(raw_dirs),
+            prompt_field,
+        )
 
-    return dataset_dirs, cache_dirs, context_lens
+    return dataset_specs, cache_dirs, context_lens
 
 
 def _resolve_context_len(context_lens: set[int]) -> int:
@@ -111,35 +125,120 @@ def _resolve_context_len(context_lens: set[int]) -> int:
     return next(iter(context_lens))
 
 
-def _read_unique_prompts(dataset_dirs: list[str]) -> list[str]:
+def _task_to_prompt(task: Any) -> str | None:
+    if task is None:
+        return None
+    if isinstance(task, (list, tuple)):
+        if not task:
+            return None
+        task = task[0]
+    text = str(task).strip()
+    if not text or text.lower() == "nan":
+        return None
+    return DEFAULT_PROMPT.format(task=text)
+
+
+def _read_prompts_from_tasks_jsonl(ds_dir: Path, prompt_field: str) -> list[str] | None:
+    tasks_path = ds_dir / "meta" / "tasks.jsonl"
+    if not tasks_path.exists():
+        return None
+    prompts: list[str] = []
+    with tasks_path.open("r", encoding="utf-8") as f:
+        for line_idx, line in enumerate(f, start=1):
+            line = line.strip()
+            if not line:
+                continue
+            record = json.loads(line)
+            key = prompt_field if prompt_field in record else "task"
+            if key not in record:
+                raise KeyError(f"Missing `{prompt_field}`/`task` field at {tasks_path}:{line_idx}")
+            prompt = _task_to_prompt(record[key])
+            if prompt is not None:
+                prompts.append(prompt)
+    return prompts
+
+
+def _read_prompts_from_episode_parquets(ds_dir: Path, prompt_field: str) -> list[str] | None:
+    episode_root = ds_dir / "meta" / "episodes"
+    if not episode_root.exists():
+        return None
+    import pandas as pd
+
+    prompts: list[str] = []
+    found_field = False
+    for parquet_path in sorted(episode_root.glob("chunk-*/*.parquet")):
+        try:
+            frame = pd.read_parquet(parquet_path, columns=[prompt_field])
+            values = frame[prompt_field].tolist()
+            found_field = True
+        except Exception:
+            if prompt_field == "tasks":
+                raise
+            try:
+                frame = pd.read_parquet(parquet_path, columns=["tasks"])
+                values = frame["tasks"].tolist()
+                found_field = True
+            except Exception:
+                continue
+        for value in values:
+            prompt = _task_to_prompt(value)
+            if prompt is not None:
+                prompts.append(prompt)
+    if not found_field:
+        return None
+    return prompts
+
+
+def _read_prompts_from_tasks_parquet(ds_dir: Path, prompt_field: str) -> list[str] | None:
+    tasks_path = ds_dir / "meta" / "tasks.parquet"
+    if not tasks_path.exists():
+        return None
+    import pandas as pd
+
+    frame = pd.read_parquet(tasks_path)
+    if prompt_field in frame.columns:
+        values = frame[prompt_field].tolist()
+    elif "task" in frame.columns:
+        values = frame["task"].tolist()
+    else:
+        values = frame.index.tolist()
+    return [prompt for value in values if (prompt := _task_to_prompt(value)) is not None]
+
+
+def _read_dataset_prompts(ds_dir: str, prompt_field: str) -> list[str]:
+    root = Path(ds_dir)
+    readers = (
+        _read_prompts_from_tasks_jsonl,
+        _read_prompts_from_episode_parquets,
+        _read_prompts_from_tasks_parquet,
+    )
+    for reader in readers:
+        prompts = reader(root, prompt_field)
+        if prompts is not None:
+            return prompts
+    raise FileNotFoundError(
+        f"Could not find prompts in {root}. Tried meta/tasks.jsonl, "
+        f"meta/episodes/*/*.parquet field `{prompt_field}`, and meta/tasks.parquet."
+    )
+
+
+def _read_unique_prompts(dataset_specs: list[tuple[str, str]]) -> list[str]:
     prompts: list[str] = []
     seen = set()
     total_task_rows = 0
 
-    for ds_dir in dataset_dirs:
-        tasks_path = Path(ds_dir) / "meta" / "tasks.jsonl"
-        if not tasks_path.exists():
-            raise FileNotFoundError(f"Missing tasks file: {tasks_path}")
-
-        with tasks_path.open("r", encoding="utf-8") as f:
-            for line_idx, line in enumerate(f, start=1):
-                line = line.strip()
-                if not line:
-                    continue
-                record = json.loads(line)
-                if "task" not in record:
-                    raise KeyError(f"Missing `task` field at {tasks_path}:{line_idx}")
-                task = str(record["task"])
-                prompt = DEFAULT_PROMPT.format(task=task)
-                total_task_rows += 1
-                if prompt not in seen:
-                    seen.add(prompt)
-                    prompts.append(prompt)
+    for ds_dir, prompt_field in dataset_specs:
+        dataset_prompts = _read_dataset_prompts(ds_dir, prompt_field)
+        total_task_rows += len(dataset_prompts)
+        for prompt in dataset_prompts:
+            if prompt not in seen:
+                seen.add(prompt)
+                prompts.append(prompt)
 
     logger.info(
-        "Loaded %d task rows from %d datasets, deduplicated to %d prompts.",
+        "Loaded %d task rows from %d dataset specs, deduplicated to %d prompts.",
         total_task_rows,
-        len(dataset_dirs),
+        len(dataset_specs),
         len(prompts),
     )
     return prompts
@@ -187,7 +286,7 @@ def main(cfg: DictConfig):
     if cfg.data is None:
         raise ValueError("`cfg.data` is required.")
 
-    dataset_dirs, cache_dirs, context_lens = _collect_dataset_settings(cfg.data)
+    dataset_specs, cache_dirs, context_lens = _collect_dataset_settings(cfg.data)
     if not cache_dirs:
         raise ValueError("No `text_embedding_cache_dir` found under `cfg.data`.")
 
@@ -197,11 +296,11 @@ def main(cfg: DictConfig):
         prompts = [override_prompt]
         logger.info("Using override_instruction; skipping dataset scan and encoding exactly 1 prompt.")
     else:
-        if not dataset_dirs:
+        if not dataset_specs:
             raise ValueError("No `dataset_dirs` found under `cfg.data`.")
-        prompts = _read_unique_prompts(dataset_dirs)
+        prompts = _read_unique_prompts(dataset_specs)
     if not prompts:
-        logger.warning("No prompts found from tasks.jsonl; nothing to do.")
+        logger.warning("No prompts found from dataset metadata; nothing to do.")
         return
 
     if torch.cuda.is_available():

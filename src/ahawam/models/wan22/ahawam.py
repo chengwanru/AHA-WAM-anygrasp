@@ -701,6 +701,7 @@ class AHAWAM(AHAWAMChunkBase):
         batch_size = int(input_latents.shape[0])
         action = inputs["action"]
         action_is_pad = inputs["action_is_pad"]
+        action_dim_mask = inputs.get("action_dim_mask")
         image_is_pad = inputs["image_is_pad"]
         obs_context = inputs["obs_context"]
         obs_context_mask = inputs["obs_context_mask"]
@@ -923,6 +924,7 @@ class AHAWAM(AHAWAMChunkBase):
             target_action=target_action,
             timestep_action=timestep_action,
             action_is_pad=action_is_pad,
+            action_dim_mask=action_dim_mask,
         )
 
         loss_total = (
@@ -961,6 +963,11 @@ class AHAWAM(AHAWAMChunkBase):
         if action_is_pad is not None:
             action_is_pad = self._slice_offset_sequence(
                 action_is_pad, offsets=offsets, action_horizon=action_horizon
+            )
+        action_dim_mask = inputs.get("action_dim_mask")
+        if action_dim_mask is not None:
+            action_dim_mask = self._slice_offset_sequence(
+                action_dim_mask, offsets=offsets, action_horizon=action_horizon
             )
         image_is_pad = inputs["image_is_pad"]
         context = inputs["context"]
@@ -1193,6 +1200,7 @@ class AHAWAM(AHAWAMChunkBase):
             target_action=target_action,
             timestep_action=timestep_action,
             action_is_pad=action_is_pad,
+            action_dim_mask=action_dim_mask,
         )
 
         loss_total = (
@@ -1214,10 +1222,24 @@ class AHAWAM(AHAWAMChunkBase):
         target_action: torch.Tensor,
         timestep_action: torch.Tensor,
         action_is_pad: torch.Tensor | None,
+        action_dim_mask: torch.Tensor | None = None,
     ) -> torch.Tensor:
-        action_loss_token = F.mse_loss(
+        action_loss_dim = F.mse_loss(
             pred_action.float(), target_action.float(), reduction="none"
-        ).mean(dim=2)
+        )
+        if action_dim_mask is not None:
+            if tuple(action_dim_mask.shape) != tuple(action_loss_dim.shape):
+                raise ValueError(
+                    "`action_dim_mask` shape mismatch: "
+                    f"got {tuple(action_dim_mask.shape)} vs expected {tuple(action_loss_dim.shape)}"
+                )
+            valid_dim = action_dim_mask.to(
+                device=action_loss_dim.device, dtype=action_loss_dim.dtype
+            )
+            valid_dim_sum = valid_dim.sum(dim=2).clamp(min=1.0)
+            action_loss_token = (action_loss_dim * valid_dim).sum(dim=2) / valid_dim_sum
+        else:
+            action_loss_token = action_loss_dim.mean(dim=2)
         action_weight = self.train_action_scheduler.training_weight(timestep_action).to(
             action_loss_token.device,
             dtype=action_loss_token.dtype,

@@ -257,6 +257,43 @@ class AHAWAMChunkBase(BaseWAM):
         return filtered_state, skipped_keys
 
     @staticmethod
+    def _filter_state_dict_for_partial_load(
+        source_state: dict[str, torch.Tensor],
+        target_state: dict[str, torch.Tensor],
+        *,
+        module_name: str,
+        denylist: tuple[str, ...],
+    ) -> tuple[dict[str, torch.Tensor], list[str]]:
+        filtered_state = {}
+        skipped_keys = []
+        for key, value in source_state.items():
+            if any(key.startswith(prefix) for prefix in denylist):
+                skipped_keys.append(f"{key}: denylist")
+                continue
+            if key not in target_state:
+                skipped_keys.append(f"{key}: not in current model")
+                continue
+            if tuple(value.shape) != tuple(target_state[key].shape):
+                skipped_keys.append(
+                    f"{key}: ckpt {list(value.shape)} vs model {list(target_state[key].shape)}"
+                )
+                continue
+            filtered_state[key] = value
+        logger.info(
+            "%s partial checkpoint load: loaded=%d skipped=%d.",
+            module_name,
+            len(filtered_state),
+            len(skipped_keys),
+        )
+        if skipped_keys:
+            logger.warning(
+                "%s partial checkpoint load skipped params:\n  %s",
+                module_name,
+                "\n  ".join(skipped_keys[:80]),
+            )
+        return filtered_state, skipped_keys
+
+    @staticmethod
     def _adapt_linear_weight_input_dim(
         source_weight: torch.Tensor, target_weight: torch.Tensor
     ) -> torch.Tensor:
@@ -927,6 +964,7 @@ class AHAWAMChunkBase(BaseWAM):
         timestep_video: torch.Tensor,
         timestep_action: torch.Tensor,
         action_is_pad: Optional[torch.Tensor],
+        action_dim_mask: Optional[torch.Tensor],
         image_is_pad: Optional[torch.Tensor],
     ) -> tuple[torch.Tensor, dict[str, float]]:
         """Compute video + action losses from pre_dit states."""
@@ -976,9 +1014,22 @@ class AHAWAMChunkBase(BaseWAM):
             loss_video_per_sample.device, dtype=loss_video_per_sample.dtype
         )
         loss_video = (loss_video_per_sample * video_weight).mean()
-        action_loss_token = F.mse_loss(
+        action_loss_dim = F.mse_loss(
             pred_action.float(), target_action.float(), reduction="none"
-        ).mean(dim=2)
+        )
+        if action_dim_mask is not None:
+            if tuple(action_dim_mask.shape) != tuple(action_loss_dim.shape):
+                raise ValueError(
+                    "`action_dim_mask` shape mismatch: "
+                    f"got {tuple(action_dim_mask.shape)} vs expected {tuple(action_loss_dim.shape)}"
+                )
+            valid_dim = action_dim_mask.to(
+                device=action_loss_dim.device, dtype=action_loss_dim.dtype
+            )
+            valid_dim_sum = valid_dim.sum(dim=2).clamp(min=1.0)
+            action_loss_token = (action_loss_dim * valid_dim).sum(dim=2) / valid_dim_sum
+        else:
+            action_loss_token = action_loss_dim.mean(dim=2)
         action_weight = self.train_action_scheduler.training_weight(timestep_action).to(
             action_loss_token.device, dtype=action_loss_token.dtype
         )
@@ -1028,6 +1079,7 @@ class AHAWAMChunkBase(BaseWAM):
         context_mask = inputs["context_mask"]
         action = inputs["action"]
         action_is_pad = inputs["action_is_pad"]
+        action_dim_mask = inputs.get("action_dim_mask")
         image_is_pad = inputs["image_is_pad"]
         obs_context = inputs["obs_context"]
         obs_context_mask = inputs["obs_context_mask"]
@@ -1095,6 +1147,7 @@ class AHAWAMChunkBase(BaseWAM):
             timestep_video=timestep_video,
             timestep_action=timestep_action,
             action_is_pad=action_is_pad,
+            action_dim_mask=action_dim_mask,
             image_is_pad=image_is_pad,
         )
 
@@ -1804,6 +1857,18 @@ class AHAWAMChunkBase(BaseWAM):
             )
         payload = torch.load(path, map_location="cpu")
         adapt_shapes = bool(getattr(self, "checkpoint_shape_adapt", False))
+        partial_load = bool(getattr(self, "checkpoint_partial_load", False))
+        denylist = tuple(
+            getattr(
+                self,
+                "checkpoint_denylist",
+                (
+                    "mixtures.action.action_encoder.",
+                    "mixtures.action.head.",
+                    "mixtures.video.action_embedding.",
+                ),
+            )
+        )
         if "mot" in payload:
             if "action_branch_embedding" in payload["mot"]:
                 logger.info(
@@ -1816,7 +1881,14 @@ class AHAWAMChunkBase(BaseWAM):
                     "current randomly initialized branch embedding will be kept."
                 )
             mot_state = self._adapt_action_branch_embedding_state(payload["mot"])
-            if adapt_shapes:
+            if partial_load:
+                mot_state, _ = self._filter_state_dict_for_partial_load(
+                    mot_state,
+                    self.mot.state_dict(),
+                    module_name="mot",
+                    denylist=denylist,
+                )
+            elif adapt_shapes:
                 mot_state, _ = self._filter_state_dict_by_shape(
                     mot_state,
                     self.mot.state_dict(),
@@ -1843,10 +1915,17 @@ class AHAWAMChunkBase(BaseWAM):
             raise ValueError(f"Checkpoint missing both `mot` and `dit` keys: {path}")
         if self.proprio_encoder is not None:
             if "proprio_encoder" in payload:
-                self._load_proprio_encoder_state(
-                    payload["proprio_encoder"],
-                    adapt_shapes=adapt_shapes,
-                )
+                if partial_load:
+                    logger.warning(
+                        "Partial checkpoint load: skipping `proprio_encoder` so current "
+                        "proprio_dim=%s encoder stays newly initialized.",
+                        self.proprio_dim,
+                    )
+                else:
+                    self._load_proprio_encoder_state(
+                        payload["proprio_encoder"],
+                        adapt_shapes=adapt_shapes,
+                    )
             else:
                 logger.warning(
                     "Checkpoint has no `proprio_encoder` weights; keeping current `proprio_encoder` params."

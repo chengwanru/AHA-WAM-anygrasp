@@ -1,0 +1,63 @@
+# @package _global_
+
+defaults:
+  - override /data: anygrasp_v2_joint
+  - override /model: ahawam
+  - _self_
+
+batch_size: 1
+num_workers: 4
+history_aware_batching: false
+freeze_video_dit: true
+
+init_checkpoint: /root/workspace/AHA-WAM/checkpoints/robotwin_ahawam.pt
+resume: null
+
+model:
+  load_text_encoder: false
+  skip_dit_load_from_pretrain: true
+  action_dit_pretrained_path: null
+  mot_checkpoint_mixed_attn: false
+  checkpoint_shape_adapt: false
+  checkpoint_partial_load: true
+  checkpoint_denylist:
+    - mixtures.action.action_encoder.
+    - mixtures.action.head.
+    - mixtures.video.action_embedding.
+  proprio_dim: 33
+  action_horizon: 64
+  action_chunk_size: 16
+  action_obs_downsample_factor: 1
+  chunk_kv_editor_num_queries: 32
+  num_history_frames: 0
+  action_video_read_mode: current_only
+  video_rope_frame_stride: 8
+  loss:
+    lambda_action: 1.0
+    lambda_action_prior: 1.0
+  video_dit_config:
+    action_dim: 64
+  action_dit_config:
+    action_dim: 64
+
+output_dir: /mnt/pfs/mory2i/train_out/ahawam_anygrasp_v2_joint/${hydra:runtime.choices.task}-${now:%Y-%m-%d}_${now:%H-%M-%S}
+
+wandb:
+  enabled: false
+  workspace: null
+  project: ahawam
+  name: anygrasp_v2_ahawam_joint
+  group: null
+  mode: offline
+
+lr_scheduler_type: cosine
+learning_rate: 5e-5
+num_epochs: 1
+max_steps: null
+log_every: 10
+save_every: 1000
+eval_every: 250
+eval_num_inference_steps: 10
+
+gradient_accumulation_steps: 1
+weight_decay: 1e-2
