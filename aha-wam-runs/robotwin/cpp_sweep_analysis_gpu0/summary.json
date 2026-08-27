@@ -1,0 +1,80 @@
+[
+  {
+    "task_name": "move_can_pot",
+    "tag": "ah64_cpp1",
+    "action_horizon": 64,
+    "chunks_per_video_prefill": 1,
+    "wall_time": 2400.1045888476074,
+    "num_episodes": 5,
+    "num_success": 0,
+    "success_rate": 0.0,
+    "return_code": -1,
+    "analysis_dir": null,
+    "episode_logs": []
+  },
+  {
+    "task_name": "move_can_pot",
+    "tag": "ah64_cpp2",
+    "action_horizon": 64,
+    "chunks_per_video_prefill": 2,
+    "wall_time": 2400.104687165469,
+    "num_episodes": 5,
+    "num_success": 0,
+    "success_rate": 0.0,
+    "return_code": -1,
+    "analysis_dir": null,
+    "episode_logs": []
+  },
+  {
+    "task_name": "move_can_pot",
+    "tag": "ah64_cpp4",
+    "action_horizon": 64,
+    "chunks_per_video_prefill": 4,
+    "wall_time": 2400.053358722478,
+    "num_episodes": 5,
+    "num_success": 0,
+    "success_rate": 0.0,
+    "return_code": -1,
+    "analysis_dir": null,
+    "episode_logs": []
+  },
+  {
+    "task_name": "place_bread_basket",
+    "tag": "ah64_cpp1",
+    "action_horizon": 64,
+    "chunks_per_video_prefill": 1,
+    "wall_time": 2400.028648007661,
+    "num_episodes": 5,
+    "num_success": 0,
+    "success_rate": 0.0,
+    "return_code": -1,
+    "analysis_dir": null,
+    "episode_logs": []
+  },
+  {
+    "task_name": "place_bread_basket",
+    "tag": "ah64_cpp2",
+    "action_horizon": 64,
+    "chunks_per_video_prefill": 2,
+    "wall_time": 2400.0410095378757,
+    "num_episodes": 5,
+    "num_success": 0,
+    "success_rate": 0.0,
+    "return_code": -1,
+    "analysis_dir": null,
+    "episode_logs": []
+  },
+  {
+    "task_name": "place_bread_basket",
+    "tag": "ah64_cpp4",
+    "action_horizon": 64,
+    "chunks_per_video_prefill": 4,
+    "wall_time": 2400.038063213229,
+    "num_episodes": 5,
+    "num_success": 0,
+    "success_rate": 0.0,
+    "return_code": -1,
+    "analysis_dir": null,
+    "episode_logs": []
+  }
+]

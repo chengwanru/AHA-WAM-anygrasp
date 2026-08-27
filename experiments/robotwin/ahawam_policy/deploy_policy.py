@@ -154,6 +154,7 @@ class WorldActionRobotWinPolicy:
         rand_device: str,
         tiled: bool,
         timing_enabled: bool,
+        detailed_analysis: bool = False,
     ) -> None:
         model_cfg_copy = OmegaConf.create(OmegaConf.to_container(model_cfg, resolve=True))
         model_cfg_copy.load_text_encoder = True
@@ -175,6 +176,7 @@ class WorldActionRobotWinPolicy:
         self.rand_device = str(rand_device)
         self.tiled = bool(tiled)
         self.timing_enabled = bool(timing_enabled)
+        self.detailed_analysis = bool(detailed_analysis)
         self.num_chunks = int(self.action_horizon // self.model.action_chunk_size)
         if self.action_horizon % int(self.model.action_chunk_size) != 0:
             raise ValueError(
@@ -217,6 +219,7 @@ class WorldActionRobotWinPolicy:
         for chunk_idx in range(self.num_chunks):
             self._timing_rollout[f"chunk_{chunk_idx + 1}_s"] = 0.0
             self._timing_rollout[f"chunk_{chunk_idx + 1}_calls"] = 0.0
+        self._step_log: list[dict[str, Any]] = []
 
         logger.info(
             "Initialized WorldActionRobotWinPolicy | ckpt=%s | stats=%s | horizon=%d | chunk=%d | num_chunks=%d | chunks_per_video_prefill=%d | video_prefill_horizon=%d",
@@ -464,6 +467,7 @@ class WorldActionRobotWinPolicy:
         return not self.pending_actions
 
     def step(self, task_env, observation: Optional[Dict[str, Any]]) -> None:
+        did_inference = False
         if self.should_request_observation():
             if observation is None:
                 raise ValueError(
@@ -472,6 +476,7 @@ class WorldActionRobotWinPolicy:
                 )
             instruction = task_env.get_instruction()
             self._fill_action_queue(observation=observation, instruction=instruction)
+            did_inference = True
 
         if self.should_request_observation():
             logger.warning("No action generated; skip current eval step.")
@@ -481,9 +486,58 @@ class WorldActionRobotWinPolicy:
         action = self.pending_actions.popleft()
         sim_t0 = time.perf_counter() if self.timing_enabled else 0.0
         task_env.take_action(action, action_type="qpos")
+        sim_dt = time.perf_counter() - sim_t0 if self.timing_enabled else 0.0
         if self.timing_enabled:
-            self._timing_rollout["sim_s"] += time.perf_counter() - sim_t0
+            self._timing_rollout["sim_s"] += sim_dt
         self.step_count += 1
+        if self.detailed_analysis:
+            log_entry: dict[str, Any] = {
+                "step": self.step_count,
+                "action_full": action.astype(float).tolist(),
+                "action_norm": float(np.linalg.norm(action)),
+                "action_min": float(np.min(action)),
+                "action_max": float(np.max(action)),
+                "sim_dt": float(sim_dt),
+                "chunks_since_prefill": self._chunks_since_video_prefill,
+                "did_inference": did_inference,
+            }
+            # Record current robot state if available.
+            try:
+                obs_data = observation.get("observation", {}) if observation else {}
+                if "joint_action" in obs_data and "vector" in obs_data["joint_action"]:
+                    log_entry["state_full"] = [
+                        float(x) for x in obs_data["joint_action"]["vector"]
+                    ]
+                robot = getattr(task_env, "robot", None)
+                if robot is not None:
+                    left_tcp = getattr(robot, "get_left_tcp_pose", lambda: None)()
+                    right_tcp = getattr(robot, "get_right_tcp_pose", lambda: None)()
+                    if left_tcp is not None:
+                        log_entry["left_tcp_p"] = (
+                            left_tcp.p.tolist() if hasattr(left_tcp, "p") else None
+                        )
+                        log_entry["left_tcp_q"] = (
+                            left_tcp.q.tolist() if hasattr(left_tcp, "q") else None
+                        )
+                    if right_tcp is not None:
+                        log_entry["right_tcp_p"] = (
+                            right_tcp.p.tolist() if hasattr(right_tcp, "p") else None
+                        )
+                        log_entry["right_tcp_q"] = (
+                            right_tcp.q.tolist() if hasattr(right_tcp, "q") else None
+                        )
+                    log_entry["left_gripper_val"] = float(
+                        getattr(robot, "get_left_gripper_val", lambda: 0.0)()
+                    )
+                    log_entry["right_gripper_val"] = float(
+                        getattr(robot, "get_right_gripper_val", lambda: 0.0)()
+                    )
+            except Exception:
+                pass
+            self._step_log.append(log_entry)
+
+    def get_step_log(self) -> list[dict[str, Any]]:
+        return list(self._step_log)
 
     def reset_timing_rollout(self) -> None:
         self._timing_rollout["infer_s"] = 0.0
@@ -496,6 +550,7 @@ class WorldActionRobotWinPolicy:
         for chunk_idx in range(self.num_chunks):
             self._timing_rollout[f"chunk_{chunk_idx + 1}_s"] = 0.0
             self._timing_rollout[f"chunk_{chunk_idx + 1}_calls"] = 0.0
+        self._step_log.clear()
 
     def get_timing_rollout(self) -> Dict[str, float]:
         timing = {
@@ -587,6 +642,9 @@ def get_model(usr_args: Dict[str, Any]):
     timing_enabled = _parse_bool(
         usr_args.get("timing_enabled", cfg.EVALUATION.get("timing_enabled", False))
     )
+    detailed_analysis = _parse_bool(
+        usr_args.get("detailed_analysis", cfg.EVALUATION.get("detailed_analysis", False))
+    )
 
     policy = WorldActionRobotWinPolicy(
         model_cfg=cfg.model,
@@ -605,6 +663,7 @@ def get_model(usr_args: Dict[str, Any]):
         rand_device=rand_device,
         tiled=tiled,
         timing_enabled=timing_enabled,
+        detailed_analysis=detailed_analysis,
     )
     return policy
 

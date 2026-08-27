@@ -255,70 +255,41 @@ class Robot:
         print("right ee: ", self.right_ee.get_name())
 
     def set_planner(self, scene=None):
-        abs_left_curobo_yml_path = os.path.join(CONFIGS.ROOT_PATH, self.left_curobo_yml_path)
-        abs_right_curobo_yml_path = os.path.join(CONFIGS.ROOT_PATH, self.right_curobo_yml_path)
+        # Use MplibPlanner directly instead of CuroboPlanner; the Curobo
+        # dependency is unavailable in this environment.
+        self.communication_flag = False
 
-        self.communication_flag = (abs_left_curobo_yml_path != abs_right_curobo_yml_path)
+        # Embodiment configs may specify "curobo" as the planner; fall back
+        # to mplib_RRT since Curobo is not installed.
+        left_planner_type = self.left_planner_type
+        if left_planner_type == "curobo":
+            left_planner_type = "mplib_RRT"
+        right_planner_type = self.right_planner_type
+        if right_planner_type == "curobo":
+            right_planner_type = "mplib_RRT"
 
-        if self.is_dual_arm:
-            abs_left_curobo_yml_path = abs_left_curobo_yml_path.replace("curobo.yml", "curobo_left.yml")
-            abs_right_curobo_yml_path = abs_right_curobo_yml_path.replace("curobo.yml", "curobo_right.yml")
-
-        if not self.communication_flag:
-            self.left_planner = CuroboPlanner(self.left_entity_origion_pose,
-                                              self.left_arm_joints_name,
-                                              [joint.get_name() for joint in self.left_entity.get_active_joints()],
-                                              yml_path=abs_left_curobo_yml_path)
-            self.right_planner = CuroboPlanner(self.right_entity_origion_pose,
-                                               self.right_arm_joints_name,
-                                               [joint.get_name() for joint in self.right_entity.get_active_joints()],
-                                               yml_path=abs_right_curobo_yml_path)
-        else:
-            self.left_conn, left_child_conn = mp.Pipe()
-            self.right_conn, right_child_conn = mp.Pipe()
-
-            left_args = {
-                "origin_pose": self.left_entity_origion_pose,
-                "joints_name": self.left_arm_joints_name,
-                "all_joints": [joint.get_name() for joint in self.left_entity.get_active_joints()],
-                "yml_path": abs_left_curobo_yml_path
-            }
-
-            right_args = {
-                "origin_pose": self.right_entity_origion_pose,
-                "joints_name": self.right_arm_joints_name,
-                "all_joints": [joint.get_name() for joint in self.right_entity.get_active_joints()],
-                "yml_path": abs_right_curobo_yml_path
-            }
-
-            self.left_proc = mp.Process(target=planner_process_worker, args=(left_child_conn, left_args))
-            self.right_proc = mp.Process(target=planner_process_worker, args=(right_child_conn, right_args))
-
-            self.left_proc.daemon = True
-            self.right_proc.daemon = True
-
-            self.left_proc.start()
-            self.right_proc.start()
+        self.left_planner = MplibPlanner(
+            self.left_urdf_path,
+            self.left_srdf_path,
+            self.left_move_group,
+            self.left_entity_origion_pose,
+            self.left_entity,
+            left_planner_type,
+            scene,
+        )
+        self.right_planner = MplibPlanner(
+            self.right_urdf_path,
+            self.right_srdf_path,
+            self.right_move_group,
+            self.right_entity_origion_pose,
+            self.right_entity,
+            right_planner_type,
+            scene,
+        )
 
         if self.need_topp:
-            self.left_mplib_planner = MplibPlanner(
-                self.left_urdf_path,
-                self.left_srdf_path,
-                self.left_move_group,
-                self.left_entity_origion_pose,
-                self.left_entity,
-                self.left_planner_type,
-                scene,
-            )
-            self.right_mplib_planner = MplibPlanner(
-                self.right_urdf_path,
-                self.right_srdf_path,
-                self.right_move_group,
-                self.right_entity_origion_pose,
-                self.right_entity,
-                self.right_planner_type,
-                scene,
-            )
+            self.left_mplib_planner = self.left_planner
+            self.right_mplib_planner = self.right_planner
 
     def update_world_pcd(self, world_pcd):
         try:

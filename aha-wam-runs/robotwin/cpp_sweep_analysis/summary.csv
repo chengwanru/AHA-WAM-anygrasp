@@ -1,0 +1,13 @@
+task_name,tag,action_horizon,chunks_per_video_prefill,num_episodes,num_success,success_rate,wall_time,return_code,gpu
+move_can_pot,ah64_cpp1,64,1,5,0,0.0000,2400.10,-1,gpu0
+move_can_pot,ah64_cpp2,64,2,5,0,0.0000,2400.10,-1,gpu0
+move_can_pot,ah64_cpp4,64,4,5,0,0.0000,2400.05,-1,gpu0
+place_bread_basket,ah64_cpp1,64,1,5,0,0.0000,2400.03,-1,gpu0
+place_bread_basket,ah64_cpp2,64,2,5,0,0.0000,2400.04,-1,gpu0
+place_bread_basket,ah64_cpp4,64,4,5,0,0.0000,2400.04,-1,gpu0
+move_stapler_pad,ah64_cpp1,64,1,5,2,0.4000,1503.48,0,gpu1
+move_stapler_pad,ah64_cpp2,64,2,5,3,0.6000,1260.88,0,gpu1
+move_stapler_pad,ah64_cpp4,64,4,5,2,0.4000,1455.93,0,gpu1
+turn_switch,ah64_cpp1,64,1,5,3,0.6000,1007.17,0,gpu1
+turn_switch,ah64_cpp2,64,2,5,4,0.8000,1026.09,0,gpu1
+turn_switch,ah64_cpp4,64,4,5,4,0.8000,789.47,0,gpu1

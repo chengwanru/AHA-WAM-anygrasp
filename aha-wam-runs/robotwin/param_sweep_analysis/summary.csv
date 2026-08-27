@@ -1,0 +1,16 @@
+task_name,tag,action_horizon,chunks_per_video_prefill,num_episodes,num_success,success_rate,wall_time
+turn_switch,ah64_cpp2,64,2,5,4,0.8000,872.21
+turn_switch,ah64_cpp1,64,1,5,4,0.8000,835.59
+turn_switch,ah32_cpp2,32,2,5,4,0.8000,1059.36
+turn_switch,ah32_cpp1,32,1,5,4,0.8000,1000.60
+turn_switch,ah16_cpp1,16,1,5,4,0.8000,836.97
+open_microwave,ah64_cpp2,64,2,5,0,0.0000,7102.85
+open_microwave,ah64_cpp1,64,1,5,0,0.0000,7262.05
+open_microwave,ah32_cpp2,32,2,5,0,0.0000,7201.53
+open_microwave,ah32_cpp1,32,1,5,0,0.0000,6957.79
+open_microwave,ah16_cpp1,16,1,5,0,0.0000,7001.40
+move_can_pot,ah64_cpp2,64,2,5,1,0.2000,5259.79
+move_can_pot,ah64_cpp1,64,1,5,3,0.6000,4851.40
+move_can_pot,ah32_cpp2,32,2,5,1,0.2000,5870.42
+move_can_pot,ah32_cpp1,32,1,5,3,0.6000,4870.58
+move_can_pot,ah16_cpp1,16,1,5,5,1.0000,5155.75

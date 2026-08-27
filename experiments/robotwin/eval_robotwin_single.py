@@ -28,9 +28,11 @@ Examples:
      gpu_id=0
 """
 
+import importlib
 import os
 import subprocess
 import sys
+import sysconfig
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -224,6 +226,7 @@ def main(cfg: DictConfig):
     _append_override(overrides, "rand_device", cfg.EVALUATION.rand_device)
     _append_override(overrides, "tiled", cfg.EVALUATION.tiled)
     _append_override(overrides, "timing_enabled", cfg.EVALUATION.timing_enabled)
+    _append_override(overrides, "detailed_analysis", cfg.EVALUATION.detailed_analysis)
 
     cmd = [
         sys.executable,
@@ -236,8 +239,49 @@ def main(cfg: DictConfig):
     ]
 
     env = os.environ.copy()
-    env["CUDA_VISIBLE_DEVICES"] = str(cfg.gpu_id)
+    # NOTE: Do NOT set CUDA_VISIBLE_DEVICES here. Sapien's Vulkan renderer
+    # requires the Vulkan device to be visible to CUDA, and pinning the
+    # visible CUDA devices breaks that mapping in this container.
+    if cfg.get("gpu_id") is not None and str(cfg.gpu_id).strip() != "":
+        pass  # reserved for future per-process GPU pinning if compatible
     env["PYTHONUNBUFFERED"] = "1"
+
+    # Headless rendering setup. The container lacks host NVIDIA GL/EGL
+    # libraries, so we use the extracted 535.183.01 driver user-space libs
+    # together with the Vulkan loader/ICD files shipped by sapien.
+    conda_prefix = Path(sys.executable).parent.parent
+    conda_lib = conda_prefix / "lib"
+    sapien_vulkan_dir = Path(sysconfig.get_path("purelib")) / "sapien" / "vulkan_library"
+
+    nvidia_driver_dir = Path(
+        "/home/ma-user/work/dataset/cwr_wulan_aha/nvidia-driver-libs/nvidia-535.183.01"
+    )
+    sapien_vulkan_lib = sapien_vulkan_dir / "libvulkan.so.1.3.224"
+    sapien_nvidia_icd = sapien_vulkan_dir / "nvidia_icd.json"
+    sapien_nvidia_egl = sapien_vulkan_dir / "10_nvidia.json"
+    lavapipe_icd = conda_prefix / "share" / "vulkan" / "icd.d" / "lvp_icd.x86_64.json"
+
+    if (
+        sapien_vulkan_lib.exists()
+        and sapien_nvidia_icd.exists()
+        and (nvidia_driver_dir / "libGLX_nvidia.so.0").exists()
+    ):
+        env["SAPIEN_VULKAN_LIBRARY_PATH"] = str(sapien_vulkan_lib)
+        env["VK_ICD_FILENAMES"] = str(sapien_nvidia_icd)
+        env["__EGL_VENDOR_LIBRARY_FILENAMES"] = str(sapien_nvidia_egl)
+        env["LD_LIBRARY_PATH"] = (
+            f"{nvidia_driver_dir}{os.pathsep}{conda_lib}{os.pathsep}"
+            f"{env.get('LD_LIBRARY_PATH', '')}"
+        )
+    else:
+        # Fallback: software Vulkan (lavapipe) without ray tracing.
+        env["SAPIEN_VULKAN_LIBRARY_PATH"] = str(
+            sapien_vulkan_lib if sapien_vulkan_lib.exists() else conda_lib / "libvulkan.so.1"
+        )
+        if lavapipe_icd.exists():
+            env["VK_ICD_FILENAMES"] = str(lavapipe_icd)
+        env["__EGL_VENDOR_LIBRARY_FILENAMES"] = str(sapien_nvidia_egl)
+        env["LD_LIBRARY_PATH"] = f"{conda_lib}{os.pathsep}{env.get('LD_LIBRARY_PATH', '')}"
 
     with open(log_file, "w", encoding="utf-8") as log_f:
         process = subprocess.Popen(

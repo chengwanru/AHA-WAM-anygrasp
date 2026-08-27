@@ -18,6 +18,7 @@ from datetime import datetime
 import importlib
 import argparse
 import pdb
+import json
 
 from generate_episode_instructions import *
 
@@ -363,6 +364,7 @@ def eval_policy(task_name,
 
         succ = False
         reset_func(model)
+        task_state_history = []
         while TASK_ENV.take_action_cnt < TASK_ENV.step_lim:
             need_obs = True
             if skip_get_obs_within_replan and hasattr(model, "should_request_observation"):
@@ -372,6 +374,28 @@ def eval_policy(task_name,
             if need_obs:
                 observation = TASK_ENV.get_obs()
             eval_func(TASK_ENV, model, observation)
+
+            # Collect task-specific state for failure analysis.
+            if task_name == "turn_switch" and hasattr(TASK_ENV, "robot") and hasattr(TASK_ENV, "switch"):
+                try:
+                    left_tcp = TASK_ENV.robot.get_left_tcp_pose()
+                    right_tcp = TASK_ENV.robot.get_right_tcp_pose()
+                    switch_pose = TASK_ENV.switch.get_pose()
+                    task_state_history.append({
+                        "step": int(TASK_ENV.take_action_cnt),
+                        "left_tcp_p": left_tcp.p.tolist() if hasattr(left_tcp, "p") else None,
+                        "left_tcp_q": left_tcp.q.tolist() if hasattr(left_tcp, "q") else None,
+                        "right_tcp_p": right_tcp.p.tolist() if hasattr(right_tcp, "p") else None,
+                        "right_tcp_q": right_tcp.q.tolist() if hasattr(right_tcp, "q") else None,
+                        "switch_p": switch_pose.p.tolist() if hasattr(switch_pose, "p") else None,
+                        "switch_q": switch_pose.q.tolist() if hasattr(switch_pose, "q") else None,
+                        "switch_qpos": TASK_ENV.switch.get_qpos().tolist(),
+                        "left_gripper_val": TASK_ENV.robot.get_left_gripper_val(),
+                        "right_gripper_val": TASK_ENV.robot.get_right_gripper_val(),
+                    })
+                except Exception:
+                    pass
+
             if TASK_ENV.eval_success:
                 succ = True
                 break
@@ -394,6 +418,7 @@ def eval_policy(task_name,
             print("\033[91mFail!\033[0m")
 
         timing_getter = getattr(model, "get_timing_rollout", None)
+        step_log_getter = getattr(model, "get_step_log", None)
         if callable(timing_getter):
             timing = timing_getter()
             take_action_cnt = max(int(getattr(TASK_ENV, "take_action_cnt", 0)), 1)
@@ -428,6 +453,27 @@ def eval_policy(task_name,
                 f"prefill_calls={prefill_calls} | action_chunk_calls={action_chunk_calls} | "
                 + " | ".join(chunk_timing_parts)
             )
+
+            # Save detailed per-episode analysis log
+            episode_log = {
+                "task_name": task_name,
+                "episode_idx": int(episode_idx),
+                "seed": int(now_seed),
+                "success": bool(succ),
+                "num_steps": int(take_action_cnt),
+                "timing": timing,
+                "task_state_history": task_state_history,
+            }
+            if callable(step_log_getter):
+                episode_log["step_log"] = step_log_getter()
+            analysis_dir = Path(str(usr_args.get("eval_output_dir", "."))) / "analysis"
+            analysis_dir.mkdir(parents=True, exist_ok=True)
+            log_path = analysis_dir / f"episode{episode_idx}_analysis.json"
+            try:
+                with open(log_path, "w", encoding="utf-8") as f:
+                    json.dump(episode_log, f, indent=2, default=str)
+            except Exception as e:
+                print(f"Warning: failed to write episode analysis log: {e}")
         else:
             print(f"Timing unavailable | model_type={type(model).__name__}")
 

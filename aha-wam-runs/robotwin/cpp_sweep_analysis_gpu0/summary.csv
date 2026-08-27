@@ -1,0 +1,7 @@
+task_name,tag,action_horizon,chunks_per_video_prefill,num_episodes,num_success,success_rate,wall_time,return_code
+move_can_pot,ah64_cpp1,64,1,5,0,0.0000,2400.10,-1
+move_can_pot,ah64_cpp2,64,2,5,0,0.0000,2400.10,-1
+move_can_pot,ah64_cpp4,64,4,5,0,0.0000,2400.05,-1
+place_bread_basket,ah64_cpp1,64,1,5,0,0.0000,2400.03,-1
+place_bread_basket,ah64_cpp2,64,2,5,0,0.0000,2400.04,-1
+place_bread_basket,ah64_cpp4,64,4,5,0,0.0000,2400.04,-1

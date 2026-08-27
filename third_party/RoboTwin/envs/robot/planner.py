@@ -275,6 +275,35 @@ except Exception as e:
     print('Exception traceback:')
     traceback.print_exc()
 
+    class CuroboPlanner:
+        """Fallback stub used when the real Curobo package is unavailable.
+
+        Policy evaluation in this benchmark does not use motion planning, so a
+        no-op planner is sufficient to let the environment initialize.
+        """
+
+        def __init__(self, *args, **kwargs):
+            pass
+
+        def update_point_cloud(self, *args, **kwargs):
+            pass
+
+        def plan_grippers(self, now_val, target_val):
+            num_step = 200
+            dis_val = target_val - now_val
+            step = dis_val / num_step
+            return {
+                "num_step": num_step,
+                "per_step": step,
+                "result": np.linspace(now_val, target_val, num_step),
+            }
+
+        def plan_path(self, *args, **kwargs):
+            return {"status": "Fail"}
+
+        def plan_batch(self, *args, **kwargs):
+            return {"status": np.array(["Failure"] * 10, dtype=object)}
+
 
 # ********************** MplibPlanner **********************
 class MplibPlanner:
@@ -402,6 +431,7 @@ class MplibPlanner:
         use_attach=False,
         arms_tag=None,
         log=True,
+        constraint_pose=None,
     ):
         """
         Interpolative planning with screw motion.
@@ -421,6 +451,63 @@ class MplibPlanner:
             result = self.plan_screw(now_qpos, target_pose, use_point_cloud, use_attach, arms_tag, log)
 
         return result
+
+    def plan_batch(
+        self,
+        now_qpos,
+        target_pose_list,
+        constraint_pose=None,
+        arms_tag=None,
+    ):
+        """Plan a batch of trajectories by planning to each target sequentially."""
+        positions = []
+        velocities = []
+        status = []
+        full_qpos = np.array(now_qpos)
+        move_group_idx = self.planner.move_group_joint_indices
+        n_targets = len(target_pose_list)
+        for target_pose in target_pose_list:
+            res = self.plan_path(full_qpos, target_pose, arms_tag=arms_tag, log=False)
+            if res["status"] != "Success":
+                status.append("Failure")
+                # Keep positions aligned with status so callers can index both
+                # by the original target index.
+                positions.append(np.zeros((0, len(move_group_idx))))
+                velocities.append(np.zeros((0, len(move_group_idx))))
+                continue
+            status.append("Success")
+            positions.append(res["position"])
+            velocities.append(res["velocity"])
+            # plan_path returns trajectories for the move_group joints only;
+            # update the corresponding entries in the full robot qpos so the
+            # next target can be planned from a consistent state.
+            last_move_group_qpos = res["position"][-1]
+            full_qpos[move_group_idx] = last_move_group_qpos
+
+        if not any(s == "Success" for s in status):
+            return {"status": np.array(["Failure"] * n_targets, dtype=object)}
+
+        # Pad trajectories to the same length for stacking
+        max_len = max(p.shape[0] for p in positions)
+        padded_positions = []
+        padded_velocities = []
+        for pos, vel in zip(positions, velocities):
+            pad = max_len - pos.shape[0]
+            if pad > 0:
+                if pos.shape[0] == 0:
+                    pos = np.zeros((max_len, pos.shape[1]), dtype=pos.dtype)
+                    vel = np.zeros((max_len, vel.shape[1]), dtype=vel.dtype)
+                else:
+                    pos = np.concatenate([pos, np.tile(pos[-1:], (pad, 1))], axis=0)
+                    vel = np.concatenate([vel, np.tile(vel[-1:], (pad, 1))], axis=0)
+            padded_positions.append(pos)
+            padded_velocities.append(vel)
+
+        return {
+            "status": np.array(status, dtype=object),
+            "position": np.stack(padded_positions, axis=0),
+            "velocity": np.stack(padded_velocities, axis=0),
+        }
 
     def plan_grippers(self, now_val, target_val):
         num_step = 200  # TODO
