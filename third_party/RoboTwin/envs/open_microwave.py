@@ -61,16 +61,42 @@ class open_microwave(Base_Task):
             self.move(self.open_gripper(arm_tag=arm_tag))
             self.move(self.move_by_displacement(arm_tag=arm_tag, y=-0.05, z=0.05))
 
-            # Grasp at contact point 1
-            self.move(self.grasp_actor(self.microwave, arm_tag=arm_tag, contact_point_id=1))
+            # Fallback re-grasp: try several contact points / pre-grasp distances
+            # because the default contact_point_id=1 can be unreachable with
+            # non-Curobo planners after the door has moved.
+            fallback_configs = [
+                (1, 0.1),
+                (1, 0.05),
+                (1, 0.02),
+                (2, 0.1),
+                (0, 0.1),
+            ]
+            regrasp_ok = False
+            for cp_id, pre_dis in fallback_configs:
+                self.plan_success = True
+                self.move(
+                    self.grasp_actor(
+                        self.microwave,
+                        arm_tag=arm_tag,
+                        pre_grasp_dis=pre_dis,
+                        contact_point_id=cp_id,
+                    )
+                )
+                if self.plan_success:
+                    regrasp_ok = True
+                    break
 
-            # Grasp more tightly at contact point 1
-            self.move(self.grasp_actor(
-                self.microwave,
-                arm_tag=arm_tag,
-                pre_grasp_dis=0.02,
-                contact_point_id=1,
-            ))
+            # Grasp more tightly at contact point 1 if the loose re-grasp succeeded
+            if regrasp_ok:
+                self.plan_success = True
+                self.move(
+                    self.grasp_actor(
+                        self.microwave,
+                        arm_tag=arm_tag,
+                        pre_grasp_dis=0.02,
+                        contact_point_id=1,
+                    )
+                )
 
             start_qpos = self.microwave.get_qpos()[0]
             for _ in range(30):

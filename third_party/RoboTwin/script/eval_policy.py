@@ -395,6 +395,28 @@ def eval_policy(task_name,
                     })
                 except Exception:
                     pass
+            elif task_name == "open_microwave" and hasattr(TASK_ENV, "robot") and hasattr(TASK_ENV, "microwave"):
+                try:
+                    left_tcp = TASK_ENV.robot.get_left_tcp_pose()
+                    right_tcp = TASK_ENV.robot.get_right_tcp_pose()
+                    microwave_pose = TASK_ENV.microwave.get_pose()
+                    microwave_qpos = TASK_ENV.microwave.get_qpos().tolist()
+                    microwave_qlimits = TASK_ENV.microwave.get_qlimits().tolist()
+                    task_state_history.append({
+                        "step": int(TASK_ENV.take_action_cnt),
+                        "left_tcp_p": left_tcp.p.tolist() if hasattr(left_tcp, "p") else None,
+                        "left_tcp_q": left_tcp.q.tolist() if hasattr(left_tcp, "q") else None,
+                        "right_tcp_p": right_tcp.p.tolist() if hasattr(right_tcp, "p") else None,
+                        "right_tcp_q": right_tcp.q.tolist() if hasattr(right_tcp, "q") else None,
+                        "microwave_p": microwave_pose.p.tolist() if hasattr(microwave_pose, "p") else None,
+                        "microwave_q": microwave_pose.q.tolist() if hasattr(microwave_pose, "q") else None,
+                        "microwave_qpos": microwave_qpos,
+                        "microwave_qlimits": microwave_qlimits,
+                        "left_gripper_val": TASK_ENV.robot.get_left_gripper_val(),
+                        "right_gripper_val": TASK_ENV.robot.get_right_gripper_val(),
+                    })
+                except Exception:
+                    pass
 
             if TASK_ENV.eval_success:
                 succ = True
