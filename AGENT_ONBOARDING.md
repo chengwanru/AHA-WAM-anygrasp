@@ -3,14 +3,17 @@
 > 本文档记录 AHA-WAM-anygrasp 在 RoboTwin 2.0 上做评测/调参 sweep 的完整工作方式:
 > 目录约定、环境搭建、模型资产、任务提交流程、以及我们踩过的所有坑。
 > 最后更新:2026-09-07
+>
+> **真正训练 / 短 finetune / 平台训练入口怎么写** → 见 [`AGENT_TRAINING.md`](./AGENT_TRAINING.md)。
 
 ---
 
 ## 0. 一句话背景
 
 我们在 **官方发布的 AHA-WAM RoboTwin checkpoint** 上做评测和 action_horizon / chunks_per_video_prefill
-参数 sweep。**我们从未训练过模型**——所有"训练任务"实际都是评测 sweep(`train_mtp.sh` 是历史命名,别被骗去重训)。
-任何"权重丢了怎么办"的问题,答案都是:从 HuggingFace 重新下载,不是重新训练。
+参数 sweep。主线 **尚未做过完整重训**——平台上叫 `train_mtp.sh` 的入口实际是评测 sweep(历史命名,别被骗去当训练)。
+若要适配 cpp=1/3 等部署节奏,按 [`AGENT_TRAINING.md`](./AGENT_TRAINING.md) 做短 finetune,不要默认从零开训。
+任何"权重丢了怎么办"的问题,答案都是:从 HuggingFace 重新下载 released ckpt,或从 `aha-wam-runs/train/` 找你们自己的 finetune 产物。
 
 ---
 
@@ -18,8 +21,9 @@
 
 | 内容 | 位置 |
 |---|---|
-| 代码仓库 | GitHub fork: `https://github.com/chengwanru/AHA-WAM-anygrasp`,分支 **`modified-working`**(不是 main!) |
+| 代码仓库 | 以 `git remote -v` 为准(常见 fork 在个人账号下),分支 **`modified-working`**(不是 main!) |
 | 集群/评测基础设施 | 仓库内 `infra/`(`train_mtp.sh`、`run_robotwin_sweep.{sh,py}`、`train_skip_phase*.sh`、`docs_skip_phase.md`) |
+| 真正训练说明 | [`AGENT_TRAINING.md`](./AGENT_TRAINING.md) + `scripts/train_zero{1,2}.sh` |
 | 评测入口 | `experiments/robotwin/eval_robotwin_single.py`(Hydra 配置) |
 | Policy 桥接代码 | `experiments/robotwin/ahawam_policy/`(deploy_policy.py 等) |
 | `third_party/RoboTwin/policy/ahawam_policy` | **symlink**,指向仓库内 `experiments/robotwin/ahawam_policy`,**必须用相对路径**(`../../../experiments/robotwin/ahawam_policy`),绝对路径换个机器就断 |
