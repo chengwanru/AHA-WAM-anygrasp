@@ -4,7 +4,8 @@
 > 目录约定、环境搭建、模型资产、任务提交流程、以及我们踩过的所有坑。
 > 最后更新:2026-09-07
 >
-> **真正训练 / 短 finetune / 平台训练入口怎么写** → 见 [`AGENT_TRAINING.md`](./AGENT_TRAINING.md)。
+> **真正训练 / 短 finetune / 平台训练入口怎么写** → 见 [`AGENT_TRAINING.md`](./AGENT_TRAINING.md)。  
+> **全部实验结果总结（ah/cpp + skip_phase 主表）** → 见 [`EXPERIMENT_RESULTS_SUMMARY.md`](./EXPERIMENT_RESULTS_SUMMARY.md)。
 
 ---
 
@@ -146,6 +147,6 @@ python experiments/robotwin/eval_robotwin_single.py \
 ## 6. 老平台遗留物(仅供考古,不要依赖)
 
 - 旧评测结果:`<repo>/aha-wam-runs/`(sweep summary)和 `evaluate_results/`(逐 episode 输出),已被 gitignore,未迁移
-- 旧 sweep 运行目录:`~/work/algorithm/cwr_wulan_algorithm/robotwin_ahawam*/`(2026-08-19 debug 输出)
+- 旧 sweep 运行目录:`~/work/algorithm/cwr_wulan2/robotwin_ahawam*/`(2026-08-19 debug 输出)
 - `cwr_wulan1/AHA-WAM-anygrasp-transfer/`(28G 拷贝)= 纯冗余,官方源都能重下
 - 监控脚本 `/tmp/monitor_experiments.py`、timing 脚本 `/tmp/run_timing_pair.sh` 属会话临时文件

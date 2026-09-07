@@ -8,7 +8,7 @@
 
 ## 0. 先读这三条，避免第一天就跑偏
 
-1. **`infra/train_mtp.sh` / `algorithm/cwr_wulan_algorithm/train_mtp.sh` 不是训练。**  
+1. **`infra/train_mtp.sh` / `algorithm/cwr_wulan2/train_mtp.sh` 不是训练。**  
    名字带 `train_` 是平台入口历史命名，实际跑的是 **RoboTwin 评测 sweep**。  
    真正训练入口是仓库里的：
    - `scripts/train_zero1.sh` / `scripts/train_zero2.sh` → `scripts/train.py`（Accelerate + DeepSpeed）
@@ -23,13 +23,13 @@
 
 | 角色 | 路径 | 说明 |
 |---|---|---|
-| 可改代码仓库 | `dataset/cwr_dataset_wulann/AHA-WAM-anygrasp`（集群挂载常为 `/opt/huawei/dataset/cwr_dataset_wulann/AHA-WAM-anygrasp`） | 分支 **`modified-working`** |
+| 可改代码仓库 | `dataset/cwr_wulan_aha/AHA-WAM-anygrasp`（集群挂载常为 `/opt/huawei/dataset/cwr_wulan_aha/AHA-WAM-anygrasp`） | 分支 **`modified-working`** |
 | 官方训练 launcher | `scripts/train_zero1.sh`、`scripts/train_zero2.sh`、`scripts/train.py` | 真正的训练 |
 | Hydra 配置 | `configs/train.yaml`、`configs/task/*.yaml`、`configs/model/*.yaml`、`configs/data/*.yaml` | 改 task / data / model 主要改这里 |
 | **平台入口脚本（推荐维护点）** | 仓库 **`infra/`** | `train_mtp.sh`（评测）、将来真正的 `train_finetune_*.sh` 也应放这里 |
-| 平台历史拷贝 | `algorithm/cwr_wulan_algorithm/train_*.sh` | 部分平台只认 `algorithm/` 下入口；改完 `infra/` 后要 **同步拷到 algorithm**，或让入口 `source`/`exec` 仓库 `infra/` |
+| 平台历史拷贝 | `algorithm/cwr_wulan2/train_*.sh` | 部分平台只认 `algorithm/` 下入口；改完 `infra/` 后要 **同步拷到 algorithm**，或让入口 `source`/`exec` 仓库 `infra/` |
 | 评测 bridge | `experiments/robotwin/ahawam_policy/` | 评测用；训练一般不走这里 |
-| baseline 只读对照 | `dataset/cwr_dataset_wulann/AHA-WAM-baseline` | worktree，勿当日常开发目录 |
+| baseline 只读对照 | `dataset/cwr_wulan_aha/AHA-WAM-baseline` | worktree，勿当日常开发目录 |
 
 GitHub（以当前 remote 为准，push 前 `git remote -v`）：
 
@@ -49,13 +49,13 @@ cd AHA-WAM-anygrasp
 | Released 评测 ckpt | `<repo>/checkpoints/AHA-WAM-RoboTwin2.0/robotwin_ahawam.pt` + **同目录** `dataset_stats.json` | HF `SereneC/AHA-WAM-RoboTwin2.0` |
 | Wan / T5 / VAE | `<repo>/checkpoints/...` 或 `DIFFSYNTH_MODEL_BASE_PATH` | 训练也要；离线设 `DIFFSYNTH_SKIP_DOWNLOAD=true` |
 | ActionDiT 初始化骨干 | 自备 `.pt`，写进 `model.action_dit_pretrained_path` | 从零训前先跑 `scripts/preprocess_action_dit_backbone.py` |
-| RoboTwin 训练数据 | 例如 `<DATA>/cwr_dataset_wulann/robotwin2.0`（按实际数据布局） | 在 `configs/task/*.yaml` 的 `data.train.dataset_dirs` 改成真实路径，**不要留 `path/to/...`** |
+| RoboTwin 训练数据 | 例如 `<DATA>/cwr_wulan_aha/robotwin2.0`（按实际数据布局） | 在 `configs/task/*.yaml` 的 `data.train.dataset_dirs` 改成真实路径，**不要留 `path/to/...`** |
 | 文本 embedding 缓存 | `text_embedding_cache_dir` | 先跑 `scripts/precompute_text_embeds.py task=...` |
 | 归一化统计 | `pretrained_norm_stats` → `dataset_stats.json` | 可与 released 同文件；finetune 时通常沿用 |
-| 训练输出 / ckpt | 建议 `<DATA>/cwr_dataset_wulann/aha-wam-runs/train/<run_name>/` | 用 Hydra `output_dir=` 指到 dataset，**别写满系统盘** |
-| 评测 sweep 输出 | `<DATA>/cwr_dataset_wulann/aha-wam-runs/robotwin_*` | 与训练输出分目录，避免互相覆盖 |
-| 离线 wheels | `<DATA>/cwr_dataset_wulann/wheels` | 集群无外网/NGC 毒源时用 |
-| sapien 运行库 | `<DATA>/cwr_dataset_wulann/sapien-runtime-libs` + `nvidia-driver-libs/...` | `LD_LIBRARY_PATH` 前置 |
+| 训练输出 / ckpt | 建议 `<DATA>/cwr_wulan_aha/aha-wam-runs/train/<run_name>/` | 用 Hydra `output_dir=` 指到 dataset，**别写满系统盘** |
+| 评测 sweep 输出 | `<DATA>/cwr_wulan_aha/aha-wam-runs/robotwin_*` | 与训练输出分目录，避免互相覆盖 |
+| 离线 wheels | `<DATA>/cwr_wulan_aha/wheels` | 集群无外网/NGC 毒源时用 |
+| sapien 运行库 | `<DATA>/cwr_wulan_aha/sapien-runtime-libs` + `nvidia-driver-libs/...` | `LD_LIBRARY_PATH` 前置 |
 
 离线强制：
 
@@ -133,11 +133,11 @@ torchrun --standalone --nproc_per_node=8 scripts/precompute_text_embeds.py task=
 ```bash
 # ZeRO-1 / ZeRO-2，第一个参数 = 每机进程数（通常 = GPU 数）
 bash scripts/train_zero1.sh 8 task=robotwin_ahawam_offset \
-  output_dir=/opt/huawei/dataset/cwr_dataset_wulann/aha-wam-runs/train/offset_ft \
+  output_dir=/opt/huawei/dataset/cwr_wulan_aha/aha-wam-runs/train/offset_ft \
   wandb.mode=offline
 
 bash scripts/train_zero2.sh 8 task=robotwin_ahawam_offset \
-  data.train.dataset_dirs=[/opt/huawei/dataset/cwr_dataset_wulann/robotwin2.0] \
+  data.train.dataset_dirs=[/opt/huawei/dataset/cwr_wulan_aha/robotwin2.0] \
   model.action_dit_pretrained_path=/path/to/ActionDiT_....pt \
   resume=/path/to/last_ckpt_or_null
 ```
@@ -160,7 +160,7 @@ bash scripts/train_zero2.sh 8 task=robotwin_ahawam_offset \
 ### 5.1 文件放哪
 
 1. **权威副本**：`infra/train_<目的>.sh`（进 git，可 review）  
-2. **平台入口**：`algorithm/cwr_wulan_algorithm/train_<目的>.sh`  
+2. **平台入口**：`algorithm/cwr_wulan2/train_<目的>.sh`  
    - 要么与 infra **内容同步**  
    - 要么 thin wrapper：`exec bash "$AHA_WAM_CODE_DIR/infra/train_<目的>.sh"`
 
@@ -174,15 +174,15 @@ echo "train_xxx.sh revision: YYYY-MM-DD-desc"   # 日志里能看见版本，防
 # ---- 写死配置（平台往往不能 set 环境变量）----
 SMOKE=1                    # 1=冒烟 0=全量；先 1 通再改 0
 NPROC_PER_NODE="${MA_NUM_GPUS:-8}"
-OUTPUT_DIR="/opt/huawei/dataset/cwr_dataset_wulann/aha-wam-runs/train/xxx"
+OUTPUT_DIR="/opt/huawei/dataset/cwr_wulan_aha/aha-wam-runs/train/xxx"
 
 # ---- 路径自探测 ----
-if [[ -d /opt/huawei/dataset/cwr_dataset_wulann/AHA-WAM-anygrasp ]]; then
+if [[ -d /opt/huawei/dataset/cwr_wulan_aha/AHA-WAM-anygrasp ]]; then
   DATA=/opt/huawei/dataset
 else
   DATA=/home/ma-user/work/dataset
 fi
-export AHA_WAM_CODE_DIR="$DATA/cwr_dataset_wulann/AHA-WAM-anygrasp"
+export AHA_WAM_CODE_DIR="$DATA/cwr_wulan_aha/AHA-WAM-anygrasp"
 # 若 OUTPUT_DIR 在探索机，把 /opt/huawei/dataset 替换成 $DATA
 
 cd "$AHA_WAM_CODE_DIR"
@@ -239,7 +239,7 @@ bash scripts/train_zero2.sh "$NPROC_PER_NODE" \
 
 ```bash
 python experiments/robotwin/eval_robotwin_single.py \
-  ckpt=/opt/huawei/dataset/cwr_dataset_wulann/aha-wam-runs/train/xxx/....pt \
+  ckpt=/opt/huawei/dataset/cwr_wulan_aha/aha-wam-runs/train/xxx/....pt \
   EVALUATION.dataset_stats_path=checkpoints/AHA-WAM-RoboTwin2.0/dataset_stats.json \
   EVALUATION.task_name=pick_dual_bottles \
   EVALUATION.eval_num_episodes=40 \
