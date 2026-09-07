@@ -154,6 +154,7 @@ class WorldActionRobotWinPolicy:
         rand_device: str,
         tiled: bool,
         timing_enabled: bool,
+        detailed_analysis: bool = False,
     ) -> None:
         model_cfg_copy = OmegaConf.create(OmegaConf.to_container(model_cfg, resolve=True))
         model_cfg_copy.load_text_encoder = True
@@ -175,6 +176,7 @@ class WorldActionRobotWinPolicy:
         self.rand_device = str(rand_device)
         self.tiled = bool(tiled)
         self.timing_enabled = bool(timing_enabled)
+        self.detailed_analysis = bool(detailed_analysis)
         self.num_chunks = int(self.action_horizon // self.model.action_chunk_size)
         if self.action_horizon % int(self.model.action_chunk_size) != 0:
             raise ValueError(
@@ -200,11 +202,60 @@ class WorldActionRobotWinPolicy:
             self.chunks_per_video_prefill * int(self.model.action_chunk_size)
         )
         self._chunks_since_video_prefill = 0
+        self._chunks_since_episode_start = 0
 
         self.pending_actions: deque[np.ndarray] = deque()
         self.episode_count = 0
         self.step_count = 0
         self._episode_prefilled = False
+        self.video_dit_mode = os.environ.get("VIDEO_DIT_MODE", "baseline").lower()
+        if self.video_dit_mode not in {"baseline", "skip_approach", "skip_all", "skip_phase"}:
+            raise ValueError(
+                f"Unsupported VIDEO_DIT_MODE: {self.video_dit_mode}. "
+                "Expected one of: baseline, skip_approach, skip_all, skip_phase."
+            )
+
+        # OVCR diagnostic probes (algorithm unchanged; inference-path switches only).
+        from ahawam.utils.ovcr_diag import get_ovcr_diag_mode
+
+        self.ovcr_diag_mode = get_ovcr_diag_mode(
+            default=str(os.environ.get("OVCR_DIAG_MODE", "baseline"))
+        )
+        self.model.ovcr_diag_mode = self.ovcr_diag_mode
+        self.model._diag_chunks_since_video_prefill = 0
+        self.model._diag_episode_count = 0
+        self.skip_approach_first_n_chunks = int(os.environ.get("SKIP_APPROACH_FIRST_N_CHUNKS", "6"))
+        self.skip_approach_gripper_closed_threshold = float(
+            os.environ.get("SKIP_APPROACH_GRIPPER_CLOSED_THRESHOLD", "0.3")
+        )
+        # skip_phase FSM (only active when VIDEO_DIT_MODE=skip_phase). Baseline path unchanged.
+        self.task_name = str(
+            os.environ.get("SKIP_PHASE_TASK_NAME")
+            or os.environ.get("ROBOTWIN_TASK_NAME")
+            or ""
+        ).strip()
+        self.skip_phase_near_thresh_m = float(os.environ.get("SKIP_PHASE_NEAR_THRESH_M", "0.10"))
+        self.skip_phase_max_consecutive_skips = int(
+            os.environ.get("SKIP_PHASE_MAX_CONSECUTIVE_SKIPS", "1")
+        )
+        self._skip_phase_consecutive_skips = 0
+        self._skip_phase_fsm = None
+        if self.video_dit_mode == "skip_phase":
+            # Skip path relies on OVCR to edit stale video KV; never run with OVCR off.
+            if self.ovcr_diag_mode != "baseline":
+                raise ValueError(
+                    f"VIDEO_DIT_MODE=skip_phase requires OVCR_DIAG_MODE=baseline "
+                    f"(got {self.ovcr_diag_mode!r}); skipped prefills must use OVCR."
+                )
+            try:
+                from .skip_phase_fsm import SkipPhaseFSM
+            except ImportError:
+                from skip_phase_fsm import SkipPhaseFSM  # type: ignore
+            self._skip_phase_fsm = SkipPhaseFSM(
+                task_name=self.task_name,
+                near_thresh_m=self.skip_phase_near_thresh_m,
+                closed_threshold=self.skip_approach_gripper_closed_threshold,
+            )
         self._timing_rollout = {
             "infer_s": 0.0,
             "sim_s": 0.0,
@@ -213,13 +264,27 @@ class WorldActionRobotWinPolicy:
             "prefill_calls": 0.0,
             "action_chunk_s": 0.0,
             "action_chunk_calls": 0.0,
+            "prefill_decisions": 0.0,
+            "skipped_prefills": 0.0,
+            "prefill_prepare_s": 0.0,
+            "prefill_vae_encode_s": 0.0,
+            "prefill_video_pre_dit_s": 0.0,
+            "prefill_video_dit_forward_s": 0.0,
+            "prefill_sub_calls": 0.0,
+            "chunk_conditioning_s": 0.0,
+            "chunk_action_denoise_s": 0.0,
+            "chunk_cleanup_s": 0.0,
+            "chunk_sub_calls": 0.0,
         }
         for chunk_idx in range(self.num_chunks):
             self._timing_rollout[f"chunk_{chunk_idx + 1}_s"] = 0.0
             self._timing_rollout[f"chunk_{chunk_idx + 1}_calls"] = 0.0
+        self._step_log: list[dict[str, Any]] = []
 
         logger.info(
-            "Initialized WorldActionRobotWinPolicy | ckpt=%s | stats=%s | horizon=%d | chunk=%d | num_chunks=%d | chunks_per_video_prefill=%d | video_prefill_horizon=%d",
+            "Initialized WorldActionRobotWinPolicy | ckpt=%s | stats=%s | horizon=%d | chunk=%d | "
+            "num_chunks=%d | chunks_per_video_prefill=%d | video_prefill_horizon=%d | "
+            "video_dit_mode=%s | ovcr_diag_mode=%s",
             checkpoint_path,
             dataset_stats_path,
             self.action_horizon,
@@ -227,6 +292,8 @@ class WorldActionRobotWinPolicy:
             self.num_chunks,
             self.chunks_per_video_prefill,
             self.video_prefill_action_horizon,
+            self.video_dit_mode,
+            self.ovcr_diag_mode,
         )
         self._warmup()
 
@@ -317,6 +384,13 @@ class WorldActionRobotWinPolicy:
         if self.timing_enabled:
             self._timing_rollout["prefill_s"] += time.perf_counter() - prefill_t0
             self._timing_rollout["prefill_calls"] += 1.0
+            if hasattr(self.model, "_last_prefill_timing"):
+                pt = self.model._last_prefill_timing
+                self._timing_rollout["prefill_prepare_s"] += float(pt.get("prepare_s", 0.0))
+                self._timing_rollout["prefill_vae_encode_s"] += float(pt.get("vae_encode_s", 0.0))
+                self._timing_rollout["prefill_video_pre_dit_s"] += float(pt.get("video_pre_dit_s", 0.0))
+                self._timing_rollout["prefill_video_dit_forward_s"] += float(pt.get("video_dit_forward_s", 0.0))
+                self._timing_rollout["prefill_sub_calls"] += 1.0
         self._episode_prefilled = True
         self._chunks_since_video_prefill = 0
 
@@ -328,6 +402,7 @@ class WorldActionRobotWinPolicy:
             self.model._inference_state = None
         self._episode_prefilled = False
         self._chunks_since_video_prefill = 0
+        self._chunks_since_episode_start = 0
 
     def _model_num_history_frames(self) -> int:
         getter = getattr(self.model, "_configured_num_history_frames", None)
@@ -371,6 +446,12 @@ class WorldActionRobotWinPolicy:
             if 0 <= chunk_index < self.num_chunks:
                 self._timing_rollout[f"chunk_{chunk_index + 1}_s"] += chunk_dt
                 self._timing_rollout[f"chunk_{chunk_index + 1}_calls"] += 1.0
+            if hasattr(self.model, "_last_chunk_timing"):
+                ct = self.model._last_chunk_timing
+                self._timing_rollout["chunk_conditioning_s"] += float(ct.get("chunk_conditioning_s", 0.0))
+                self._timing_rollout["chunk_action_denoise_s"] += float(ct.get("action_denoise_s", 0.0))
+                self._timing_rollout["chunk_cleanup_s"] += float(ct.get("chunk_cleanup_s", 0.0))
+                self._timing_rollout["chunk_sub_calls"] += 1.0
         return pred
 
     def _normalize_state(self, state: np.ndarray) -> torch.Tensor:
@@ -436,16 +517,103 @@ class WorldActionRobotWinPolicy:
         action_chunk = self._denormalize_action(action_tensor)[0]  # [T, D]
         return action_chunk
 
-    def _fill_action_queue(self, observation: Dict[str, Any], instruction: str) -> None:
+    def _is_approach_phase(self, observation: Optional[Dict[str, Any]]) -> bool:
+        """Heuristic for VIDEO_DIT_MODE=skip_approach.
+
+        The approach phase is the early part of an episode before any gripper has
+        closed for grasping/contact. We skip video prefill during this window to
+        save latency; once a gripper closes (or the chunk budget runs out) we fall
+        back to the normal prefill schedule.
+        """
+        if self._chunks_since_episode_start > self.skip_approach_first_n_chunks:
+            return False
+        if observation is None:
+            return True
+        obs_data = observation.get("observation", {})
+        joint_action = obs_data.get("joint_action", {})
+        vector = joint_action.get("vector")
+        if vector is None or len(vector) < 14:
+            return True
+        left_gripper = float(vector[6])
+        right_gripper = float(vector[13])
+        # If either gripper has closed significantly, manipulation/contact has started.
+        if (
+            left_gripper < self.skip_approach_gripper_closed_threshold
+            or right_gripper < self.skip_approach_gripper_closed_threshold
+        ):
+            return False
+        return True
+
+    def _fill_action_queue(
+        self,
+        observation: Dict[str, Any],
+        instruction: str,
+        task_env: Optional[Any] = None,
+    ) -> None:
         if not hasattr(self.model, "_inference_state") or self.model._inference_state is None:
             next_chunk_index = 0
         else:
             next_chunk_index = int(self.model._inference_state.get("next_chunk_index", 0))
-        if (
+        needs_reset = (
             next_chunk_index >= self.chunks_per_video_prefill
             or self._chunks_since_video_prefill >= self.chunks_per_video_prefill
-        ):
-            self._soft_reset_for_new_observation()
+        )
+        # Oracle probe: refresh video DiT on every action chunk to estimate the
+        # upper bound of "always-fresh planner context" without OVCR edits.
+        if self.ovcr_diag_mode == "oracle" and self._episode_prefilled:
+            needs_reset = True
+        if needs_reset:
+            self._timing_rollout["prefill_decisions"] += 1.0
+            skip_prefill = False
+            if self.ovcr_diag_mode == "oracle":
+                skip_prefill = False
+            elif self.video_dit_mode == "skip_all" and self._episode_prefilled:
+                skip_prefill = True
+            elif self.video_dit_mode == "skip_approach" and self._episode_prefilled:
+                skip_prefill = self._is_approach_phase(observation)
+            elif self.video_dit_mode == "skip_phase" and self._episode_prefilled:
+                if self._skip_phase_fsm is not None:
+                    eligible = bool(
+                        self._skip_phase_fsm.should_skip_prefill(task_env, observation)
+                    )
+                    # Budget: at most N consecutive skipped prefills → ≤ N/(N+1)
+                    # of decisions when always eligible (N=1 ⇒ ≤50%).
+                    if (
+                        eligible
+                        and self._skip_phase_consecutive_skips
+                        < self.skip_phase_max_consecutive_skips
+                    ):
+                        skip_prefill = True
+                        self._skip_phase_consecutive_skips += 1
+                    else:
+                        skip_prefill = False
+                        self._skip_phase_consecutive_skips = 0
+                    if self._skip_phase_fsm.last_info is not None:
+                        self._skip_phase_fsm.last_info["eligible"] = eligible
+                        self._skip_phase_fsm.last_info["skip"] = skip_prefill
+                        self._skip_phase_fsm.last_info["consecutive_skips"] = (
+                            self._skip_phase_consecutive_skips
+                        )
+                        if eligible and not skip_prefill:
+                            self._skip_phase_fsm.last_info["reason"] = (
+                                str(self._skip_phase_fsm.last_info.get("reason", ""))
+                                + "|budget_force_prefill"
+                            )
+                else:
+                    skip_prefill = False
+
+            if skip_prefill:
+                # Keep current video state (kv cache) and only reset the chunk
+                # counter so action generation continues without a new prefill.
+                self._chunks_since_video_prefill = 0
+                if hasattr(self.model, "_inference_state") and self.model._inference_state is not None:
+                    self.model._inference_state["next_chunk_index"] = 0
+                self._timing_rollout["skipped_prefills"] += 1.0
+            else:
+                self._soft_reset_for_new_observation()
+
+        self.model._diag_chunks_since_video_prefill = int(self._chunks_since_video_prefill)
+        self.model._diag_episode_count = int(self.episode_count)
 
         action_chunk = self._predict_next_chunk(observation=observation, instruction=instruction)
         expected_chunk_size = int(self.model.action_chunk_size)
@@ -459,11 +627,14 @@ class WorldActionRobotWinPolicy:
         for action in action_chunk:
             self.pending_actions.append(np.asarray(action, dtype=np.float32))
         self._chunks_since_video_prefill += 1
+        self._chunks_since_episode_start += 1
+        self.model._diag_chunks_since_video_prefill = int(self._chunks_since_video_prefill)
 
     def should_request_observation(self) -> bool:
         return not self.pending_actions
 
     def step(self, task_env, observation: Optional[Dict[str, Any]]) -> None:
+        did_inference = False
         if self.should_request_observation():
             if observation is None:
                 raise ValueError(
@@ -471,7 +642,10 @@ class WorldActionRobotWinPolicy:
                     "(chunk step for ahawam deploy)."
                 )
             instruction = task_env.get_instruction()
-            self._fill_action_queue(observation=observation, instruction=instruction)
+            self._fill_action_queue(
+                observation=observation, instruction=instruction, task_env=task_env
+            )
+            did_inference = True
 
         if self.should_request_observation():
             logger.warning("No action generated; skip current eval step.")
@@ -479,11 +653,69 @@ class WorldActionRobotWinPolicy:
             return
 
         action = self.pending_actions.popleft()
+        # Optional gripper override for recovery / fallback strategies.
+        override_steps = getattr(self, "gripper_override_steps", 0)
+        if override_steps > 0:
+            action = np.array(action, dtype=np.float32)
+            action[6] = float(getattr(self, "gripper_override_value", 1.0))
+            action[13] = float(getattr(self, "gripper_override_value", 1.0))
+            self.gripper_override_steps = override_steps - 1
         sim_t0 = time.perf_counter() if self.timing_enabled else 0.0
         task_env.take_action(action, action_type="qpos")
+        sim_dt = time.perf_counter() - sim_t0 if self.timing_enabled else 0.0
         if self.timing_enabled:
-            self._timing_rollout["sim_s"] += time.perf_counter() - sim_t0
+            self._timing_rollout["sim_s"] += sim_dt
         self.step_count += 1
+        if self.detailed_analysis:
+            log_entry: dict[str, Any] = {
+                "step": self.step_count,
+                "action_full": action.astype(float).tolist(),
+                "action_norm": float(np.linalg.norm(action)),
+                "action_min": float(np.min(action)),
+                "action_max": float(np.max(action)),
+                "sim_dt": float(sim_dt),
+                "chunks_since_prefill": self._chunks_since_video_prefill,
+                "did_inference": did_inference,
+            }
+            # Record current robot state if available.
+            try:
+                obs_data = observation.get("observation", {}) if observation else {}
+                if "joint_action" in obs_data and "vector" in obs_data["joint_action"]:
+                    log_entry["state_full"] = [
+                        float(x) for x in obs_data["joint_action"]["vector"]
+                    ]
+                robot = getattr(task_env, "robot", None)
+                if robot is not None:
+                    left_tcp = getattr(robot, "get_left_tcp_pose", lambda: None)()
+                    right_tcp = getattr(robot, "get_right_tcp_pose", lambda: None)()
+                    if left_tcp is not None:
+                        log_entry["left_tcp_p"] = (
+                            left_tcp.p.tolist() if hasattr(left_tcp, "p") else None
+                        )
+                        log_entry["left_tcp_q"] = (
+                            left_tcp.q.tolist() if hasattr(left_tcp, "q") else None
+                        )
+                    if right_tcp is not None:
+                        log_entry["right_tcp_p"] = (
+                            right_tcp.p.tolist() if hasattr(right_tcp, "p") else None
+                        )
+                        log_entry["right_tcp_q"] = (
+                            right_tcp.q.tolist() if hasattr(right_tcp, "q") else None
+                        )
+                    log_entry["left_gripper_val"] = float(
+                        getattr(robot, "get_left_gripper_val", lambda: 0.0)()
+                    )
+                    log_entry["right_gripper_val"] = float(
+                        getattr(robot, "get_right_gripper_val", lambda: 0.0)()
+                    )
+            except Exception:
+                pass
+            if self._skip_phase_fsm is not None and self._skip_phase_fsm.last_info:
+                log_entry["skip_phase"] = dict(self._skip_phase_fsm.last_info)
+            self._step_log.append(log_entry)
+
+    def get_step_log(self) -> list[dict[str, Any]]:
+        return list(self._step_log)
 
     def reset_timing_rollout(self) -> None:
         self._timing_rollout["infer_s"] = 0.0
@@ -493,9 +725,21 @@ class WorldActionRobotWinPolicy:
         self._timing_rollout["prefill_calls"] = 0.0
         self._timing_rollout["action_chunk_s"] = 0.0
         self._timing_rollout["action_chunk_calls"] = 0.0
+        self._timing_rollout["prefill_decisions"] = 0.0
+        self._timing_rollout["skipped_prefills"] = 0.0
+        self._timing_rollout["prefill_prepare_s"] = 0.0
+        self._timing_rollout["prefill_vae_encode_s"] = 0.0
+        self._timing_rollout["prefill_video_pre_dit_s"] = 0.0
+        self._timing_rollout["prefill_video_dit_forward_s"] = 0.0
+        self._timing_rollout["prefill_sub_calls"] = 0.0
+        self._timing_rollout["chunk_conditioning_s"] = 0.0
+        self._timing_rollout["chunk_action_denoise_s"] = 0.0
+        self._timing_rollout["chunk_cleanup_s"] = 0.0
+        self._timing_rollout["chunk_sub_calls"] = 0.0
         for chunk_idx in range(self.num_chunks):
             self._timing_rollout[f"chunk_{chunk_idx + 1}_s"] = 0.0
             self._timing_rollout[f"chunk_{chunk_idx + 1}_calls"] = 0.0
+        self._step_log.clear()
 
     def get_timing_rollout(self) -> Dict[str, float]:
         timing = {
@@ -506,7 +750,44 @@ class WorldActionRobotWinPolicy:
             "prefill_calls": float(self._timing_rollout["prefill_calls"]),
             "action_chunk_s": float(self._timing_rollout["action_chunk_s"]),
             "action_chunk_calls": float(self._timing_rollout["action_chunk_calls"]),
+            "prefill_decisions": float(self._timing_rollout["prefill_decisions"]),
+            "skipped_prefills": float(self._timing_rollout["skipped_prefills"]),
+            "prefill_prepare_s": float(self._timing_rollout["prefill_prepare_s"]),
+            "prefill_vae_encode_s": float(self._timing_rollout["prefill_vae_encode_s"]),
+            "prefill_video_pre_dit_s": float(self._timing_rollout["prefill_video_pre_dit_s"]),
+            "prefill_video_dit_forward_s": float(self._timing_rollout["prefill_video_dit_forward_s"]),
+            "prefill_sub_calls": float(self._timing_rollout["prefill_sub_calls"]),
+            "chunk_conditioning_s": float(self._timing_rollout["chunk_conditioning_s"]),
+            "chunk_action_denoise_s": float(self._timing_rollout["chunk_action_denoise_s"]),
+            "chunk_cleanup_s": float(self._timing_rollout["chunk_cleanup_s"]),
+            "chunk_sub_calls": float(self._timing_rollout["chunk_sub_calls"]),
         }
+        decisions = max(timing["prefill_decisions"], 1.0)
+        timing["skipped_prefill_ratio"] = timing["skipped_prefills"] / decisions
+        timing["skipped_steps"] = (
+            timing["skipped_prefills"]
+            * self.chunks_per_video_prefill
+            * int(self.model.action_chunk_size)
+        )
+        prefill_calls = max(timing["prefill_calls"], 1.0)
+        timing["prefill_s_per_call"] = timing["prefill_s"] / prefill_calls
+        chunk_calls = max(timing["action_chunk_calls"], 1.0)
+        timing["action_chunk_s_per_call"] = timing["action_chunk_s"] / chunk_calls
+        timing["infer_s_per_call"] = timing["infer_s"] / max(timing["infer_calls"], 1.0)
+        infer_calls = max(timing["infer_calls"], 1.0)
+        timing["sim_s_per_step"] = timing["sim_s"] / max(self.step_count, 1)
+        prefill_sub_calls = max(timing["prefill_sub_calls"], 1.0)
+        timing["prefill_prepare_avg_s"] = timing["prefill_prepare_s"] / prefill_sub_calls
+        timing["prefill_vae_encode_avg_s"] = timing["prefill_vae_encode_s"] / prefill_sub_calls
+        timing["prefill_video_pre_dit_avg_s"] = timing["prefill_video_pre_dit_s"] / prefill_sub_calls
+        timing["prefill_video_dit_forward_avg_s"] = timing["prefill_video_dit_forward_s"] / prefill_sub_calls
+        chunk_sub_calls = max(timing["chunk_sub_calls"], 1.0)
+        timing["chunk_conditioning_avg_s"] = timing["chunk_conditioning_s"] / chunk_sub_calls
+        timing["chunk_action_denoise_avg_s"] = timing["chunk_action_denoise_s"] / chunk_sub_calls
+        timing["chunk_cleanup_avg_s"] = timing["chunk_cleanup_s"] / chunk_sub_calls
+        timing["chunk_action_denoise_step_avg_s"] = timing["chunk_action_denoise_s"] / max(
+            chunk_sub_calls * max(self.num_inference_steps, 1), 1.0
+        )
         for chunk_idx in range(self.num_chunks):
             timing[f"chunk_{chunk_idx + 1}_s"] = float(
                 self._timing_rollout[f"chunk_{chunk_idx + 1}_s"]
@@ -522,6 +803,9 @@ class WorldActionRobotWinPolicy:
         self.episode_count += 1
         self.step_count = 0
         self.reset_timing_rollout()
+        if self._skip_phase_fsm is not None:
+            self._skip_phase_fsm.reset()
+            self._skip_phase_consecutive_skips = 0
 
 
 def encode_obs(observation: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
@@ -587,6 +871,14 @@ def get_model(usr_args: Dict[str, Any]):
     timing_enabled = _parse_bool(
         usr_args.get("timing_enabled", cfg.EVALUATION.get("timing_enabled", False))
     )
+    detailed_analysis = _parse_bool(
+        usr_args.get("detailed_analysis", cfg.EVALUATION.get("detailed_analysis", False))
+    )
+
+    # Propagate task name for skip_phase FSM (env wins if already set by sweep).
+    task_name = usr_args.get("task_name")
+    if task_name is not None and str(task_name).strip():
+        os.environ.setdefault("SKIP_PHASE_TASK_NAME", str(task_name).strip())
 
     policy = WorldActionRobotWinPolicy(
         model_cfg=cfg.model,
@@ -605,7 +897,12 @@ def get_model(usr_args: Dict[str, Any]):
         rand_device=rand_device,
         tiled=tiled,
         timing_enabled=timing_enabled,
+        detailed_analysis=detailed_analysis,
     )
+    tn = str(task_name or os.environ.get("SKIP_PHASE_TASK_NAME") or "").strip()
+    if tn and getattr(policy, "_skip_phase_fsm", None) is not None:
+        policy.task_name = tn
+        policy._skip_phase_fsm.set_task_name(tn)
     return policy
 
 

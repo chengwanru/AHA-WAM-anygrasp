@@ -31,11 +31,15 @@ class open_microwave(Base_Task):
     def play_once(self):
         arm_tag = ArmTag("left")
 
+        print("[open_microwave] Starting initial grasp at contact_point_id=0 ...")
         # Grasp the microwave with pre-grasp displacement
         self.move(self.grasp_actor(self.microwave, arm_tag=arm_tag, pre_grasp_dis=0.08, contact_point_id=0))
+        print(f"[open_microwave] Initial grasp done. plan_success={self.plan_success}")
 
         start_qpos = self.microwave.get_qpos()[0]
-        for _ in range(50):
+        print(f"[open_microwave] Start qpos={start_qpos}; entering rotation loop (contact_point_id=4)")
+        for i in range(50):
+            print(f"[open_microwave] Rotation loop iter {i}, qpos={self.microwave.get_qpos()[0]}")
             # Rotate microwave
             self.move(
                 self.grasp_actor(
@@ -45,35 +49,74 @@ class open_microwave(Base_Task):
                     grasp_dis=0.0,
                     contact_point_id=4,
                 ))
+            print(f"[open_microwave] Rotation loop iter {i} done. plan_success={self.plan_success}")
 
             new_qpos = self.microwave.get_qpos()[0]
             if new_qpos - start_qpos <= 0.001:
+                print(f"[open_microwave] Door stopped moving, breaking rotation loop")
                 break
             start_qpos = new_qpos
             if not self.plan_success:
+                print(f"[open_microwave] plan_success=False, breaking rotation loop")
                 break
             if self.check_success(target=0.7):
+                print(f"[open_microwave] Success reached, breaking rotation loop")
                 break
+
+        print(f"[open_microwave] After rotation loop: success={self.check_success(target=0.7)}, qpos={self.microwave.get_qpos()[0]}")
 
         if not self.check_success(target=0.7):
             self.plan_success = True  # Try new way
+            print("[open_microwave] Attempting fallback re-grasp sequence")
             # Open gripper
             self.move(self.open_gripper(arm_tag=arm_tag))
             self.move(self.move_by_displacement(arm_tag=arm_tag, y=-0.05, z=0.05))
 
-            # Grasp at contact point 1
-            self.move(self.grasp_actor(self.microwave, arm_tag=arm_tag, contact_point_id=1))
+            # Fallback re-grasp: try several contact points / pre-grasp distances
+            # because the default contact_point_id=1 can be unreachable with
+            # non-Curobo planners after the door has moved.
+            fallback_configs = [
+                (1, 0.1),
+                (1, 0.05),
+                (1, 0.02),
+                (2, 0.1),
+                (0, 0.1),
+            ]
+            regrasp_ok = False
+            for cp_id, pre_dis in fallback_configs:
+                print(f"[open_microwave] Fallback re-grasp cp_id={cp_id}, pre_dis={pre_dis}")
+                self.plan_success = True
+                self.move(
+                    self.grasp_actor(
+                        self.microwave,
+                        arm_tag=arm_tag,
+                        pre_grasp_dis=pre_dis,
+                        contact_point_id=cp_id,
+                    )
+                )
+                print(f"[open_microwave] Fallback re-grasp cp_id={cp_id}, pre_dis={pre_dis} done. plan_success={self.plan_success}")
+                if self.plan_success:
+                    regrasp_ok = True
+                    break
 
-            # Grasp more tightly at contact point 1
-            self.move(self.grasp_actor(
-                self.microwave,
-                arm_tag=arm_tag,
-                pre_grasp_dis=0.02,
-                contact_point_id=1,
-            ))
+            # Grasp more tightly at contact point 1 if the loose re-grasp succeeded
+            if regrasp_ok:
+                print("[open_microwave] Tightening grasp at contact_point_id=1")
+                self.plan_success = True
+                self.move(
+                    self.grasp_actor(
+                        self.microwave,
+                        arm_tag=arm_tag,
+                        pre_grasp_dis=0.02,
+                        contact_point_id=1,
+                    )
+                )
+                print(f"[open_microwave] Tightening grasp done. plan_success={self.plan_success}")
 
             start_qpos = self.microwave.get_qpos()[0]
-            for _ in range(30):
+            print(f"[open_microwave] Entering final rotation loop (contact_point_id=2), qpos={start_qpos}")
+            for i in range(30):
+                print(f"[open_microwave] Final rotation loop iter {i}, qpos={self.microwave.get_qpos()[0]}")
                 # Rotate microwave using contact point 2
                 self.move(
                     self.grasp_actor(
@@ -83,16 +126,21 @@ class open_microwave(Base_Task):
                         grasp_dis=0.0,
                         contact_point_id=2,
                     ))
+                print(f"[open_microwave] Final rotation loop iter {i} done. plan_success={self.plan_success}")
 
                 new_qpos = self.microwave.get_qpos()[0]
                 if new_qpos - start_qpos <= 0.001:
+                    print(f"[open_microwave] Door stopped moving, breaking final rotation loop")
                     break
                 start_qpos = new_qpos
                 if not self.plan_success:
+                    print(f"[open_microwave] plan_success=False, breaking final rotation loop")
                     break
                 if self.check_success(target=0.7):
+                    print(f"[open_microwave] Success reached, breaking final rotation loop")
                     break
 
+        print(f"[open_microwave] play_once finished. qpos={self.microwave.get_qpos()[0]}, success={self.check_success(target=0.7)}")
         self.info["info"] = {
             "{A}": f"{self.model_name}/base{self.model_id}",
             "{a}": str(arm_tag),

@@ -14,30 +14,30 @@ from .._GLOBAL_CONFIGS import CONFIGS_PATH
 import os
 from sapien.sensor import StereoDepthSensor, StereoDepthSensorConfig
 
-try:
-    import pytorch3d.ops as torch3d_ops
+def fps(points, num_points=1024, use_cuda=True):
+    """Farthest point sampling using PyTorch (no pytorch3d dependency)."""
+    if isinstance(points, np.ndarray):
+        points = torch.from_numpy(points).float()
+    device = torch.device("cuda" if use_cuda and torch.cuda.is_available() else "cpu")
+    points = points.to(device)
+    N = points.shape[0]
+    K = min(num_points, N)
+    if K <= 0:
+        return points.cpu().numpy(), torch.zeros((1, 0), dtype=torch.long, device=device)
 
-    def fps(points, num_points=1024, use_cuda=True):
-        K = [num_points]
-        if use_cuda:
-            points = torch.from_numpy(points).cuda()
-            sampled_points, indices = torch3d_ops.sample_farthest_points(points=points.unsqueeze(0), K=K)
-            sampled_points = sampled_points.squeeze(0)
-            sampled_points = sampled_points.cpu().numpy()
-        else:
-            points = torch.from_numpy(points)
-            sampled_points, indices = torch3d_ops.sample_farthest_points(points=points.unsqueeze(0), K=K)
-            sampled_points = sampled_points.squeeze(0)
-            sampled_points = sampled_points.numpy()
+    # Start from a random point for determinism use a fixed seed if desired
+    indices = torch.zeros(K, dtype=torch.long, device=device)
+    distances = torch.full((N,), float("inf"), device=device)
+    farthest = torch.randint(0, N, (1,), device=device).item()
+    for i in range(K):
+        indices[i] = farthest
+        cur = points[farthest].unsqueeze(0)
+        dist = torch.sum((points - cur) ** 2, dim=1)
+        distances = torch.minimum(distances, dist)
+        farthest = torch.argmax(distances).item()
 
-        return sampled_points, indices
-
-except:
-    print("missing pytorch3d")
-
-    def fps(points, num_points=1024, use_cuda=True):
-        print("fps error: missing pytorch3d")
-        exit()
+    sampled_points = points[indices].cpu().numpy()
+    return sampled_points, indices.unsqueeze(0)
 
 
 class Camera:

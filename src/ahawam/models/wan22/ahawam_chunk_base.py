@@ -1334,6 +1334,10 @@ class AHAWAMChunkBase(BaseWAM):
                 f"`chunk_proprio` is required for `infer_action_chunk`. "
                 f"(chunk_index={chunk_index})"
             )
+        self._last_chunk_timing = {}
+        import time as _time
+
+        t0 = _time.perf_counter()
         (
             chunk_conditioning_context,
             chunk_conditioning_mask,
@@ -1352,6 +1356,8 @@ class AHAWAMChunkBase(BaseWAM):
             context=context,
             obs_context=chunk_conditioning_context,
         )
+        self._last_chunk_timing["chunk_conditioning_s"] = _time.perf_counter() - t0
+
         obs_proprio_tokens_per_chunk = self._require_obs_proprio_tokens_per_chunk()
 
         current_latents = inference_state["start_latents"]
@@ -1366,6 +1372,7 @@ class AHAWAMChunkBase(BaseWAM):
             )
         )
 
+        t0 = _time.perf_counter()
         for step_t_action, step_delta_action in zip(
             infer_timesteps_action, infer_deltas_action
         ):
@@ -1393,6 +1400,9 @@ class AHAWAMChunkBase(BaseWAM):
             noisy_chunk = self.infer_action_scheduler.step(
                 pred_action, step_delta_action, noisy_chunk
             )
+        self._last_chunk_timing["action_denoise_s"] = _time.perf_counter() - t0
+
+        t0 = _time.perf_counter()
 
         current_latents[:, chunk_start:chunk_end] = noisy_chunk
 
@@ -1414,6 +1424,8 @@ class AHAWAMChunkBase(BaseWAM):
                 obs_proprio_tokens_per_chunk=obs_proprio_tokens_per_chunk,
             )
             action_history_seq_len += self.action_chunk_size
+
+        self._last_chunk_timing["chunk_cleanup_s"] = _time.perf_counter() - t0
 
         updated_state = {
             **inference_state,

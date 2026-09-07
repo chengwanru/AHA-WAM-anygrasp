@@ -340,6 +340,14 @@ class AHAWAM(AHAWAMChunkBase):
             obs_context=visual_obs_context,
             obs_context_mask=visual_obs_mask,
         )
+        diag_mode = getattr(self, "ovcr_diag_mode", None)
+        diag_meta = {
+            "model_chunk_index": int(chunk_index),
+            "chunks_since_video_prefill": int(
+                getattr(self, "_diag_chunks_since_video_prefill", -1)
+            ),
+            "episode_count": int(getattr(self, "_diag_episode_count", -1)),
+        }
         inference_state["_chunk_video_kv_cache"] = (
             self.mot.build_chunk_updated_video_kv_cache(
                 video_kv_cache=inference_state["video_kv_cache"],
@@ -348,6 +356,8 @@ class AHAWAM(AHAWAMChunkBase):
                     inference_state["video_tokens_per_frame"]
                 ),
                 chunk_index=0,
+                diag_mode=diag_mode,
+                diag_meta=diag_meta,
             )
         )
         return proprio_context, proprio_mask, chunk_index
@@ -397,6 +407,10 @@ class AHAWAM(AHAWAMChunkBase):
                 "'first_frame_causal' or 'per_frame_causal'."
             )
 
+        import time as _time
+
+        self._last_prefill_timing = {}
+        t0 = _time.perf_counter()
         latents_action, batch_size = self._prepare_action_start_latents(
             input_image=input_image,
             action_horizon=action_horizon,
@@ -411,11 +425,17 @@ class AHAWAM(AHAWAMChunkBase):
             context=context,
             context_mask=context_mask,
         )
+        self._last_prefill_timing["prepare_s"] = _time.perf_counter() - t0
+
+        t0 = _time.perf_counter()
         input_image = input_image.to(device=self.device, dtype=self.torch_dtype)
         first_frame_latents = self._encode_input_image_latents_tensor(
             input_image=input_image,
             tiled=tiled,
         )
+        self._last_prefill_timing["vae_encode_s"] = _time.perf_counter() - t0
+
+        t0 = _time.perf_counter()
 
         fuse_flag = bool(
             getattr(self.video_expert, "fuse_vae_embedding_in_latents", False)
@@ -437,6 +457,7 @@ class AHAWAM(AHAWAMChunkBase):
             dtype=first_frame_latents.dtype,
             device=self.device,
         )
+        t0 = _time.perf_counter()
         video_pre = self.video_expert.pre_dit(
             x=first_frame_latents,
             timestep=timestep_video,
@@ -452,6 +473,8 @@ class AHAWAM(AHAWAMChunkBase):
             ),
             clean_prefix_frames=1,
         )
+        self._last_prefill_timing["video_pre_dit_s"] = _time.perf_counter() - t0
+
         video_seq_len = int(video_pre["tokens"].shape[1])
         video_tokens_per_frame = int(video_pre["meta"]["tokens_per_frame"])
 
@@ -460,6 +483,7 @@ class AHAWAM(AHAWAMChunkBase):
             getattr(self, "_history_kv_entries", None) or []
         ) if num_history > 0 else []
 
+        t0 = _time.perf_counter()
         if prior_entries:
             prefix_cache = self._concat_history_kv_entries(prior_entries)
             prefix_seq_len = int(prefix_cache[0]["k"].shape[1])
@@ -486,6 +510,7 @@ class AHAWAM(AHAWAMChunkBase):
                 video_seq_len=video_seq_len,
                 video_tokens_per_frame=video_tokens_per_frame,
             )
+        self._last_prefill_timing["video_dit_forward_s"] = _time.perf_counter() - t0
 
         self._observed_frame_index = (
             current_frame_index + action_horizon // video_rope_frame_stride

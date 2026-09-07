@@ -5,7 +5,7 @@ defaults:
   - override /task: robotwin_ahawam
   - _self_
 
-ckpt: null
+ckpt: /home/ma-user/work/dataset/cwr_dataset_wulann/AHA-WAM-anygrasp/checkpoints/AHA-WAM-RoboTwin2.0/robotwin_ahawam.pt
 gpu_id: 0
 
 model:
@@ -14,13 +14,13 @@ model:
   action_dit_pretrained_path: null
 
 EVALUATION:
-  robotwin_root: path/to/RoboTwin
+  robotwin_root: /home/ma-user/work/dataset/cwr_dataset_wulann/AHA-WAM-anygrasp/third_party/RoboTwin
   policy_name: ahawam_policy
   task_name: null
   task_config: demo_randomized
   instruction_type: unseen
-  eval_num_episodes: 100
-  output_dir: path/to/evaluate_results/robotwin/${hydra:runtime.choices.task}/${now:%Y%m%d_%H%M%S}
+  eval_num_episodes: 1
+  output_dir: /home/ma-user/work/dataset/cwr_dataset_wulann/aha-wam-runs/robotwin/${hydra:runtime.choices.task}/${now:%Y%m%d_%H%M%S}
 
   # Action inference
   action_horizon: null
@@ -32,6 +32,7 @@ EVALUATION:
   rand_device: cpu
   tiled: false
   timing_enabled: false
+  detailed_analysis: false
 
   # Runtime inputs
   dataset_stats_path: null

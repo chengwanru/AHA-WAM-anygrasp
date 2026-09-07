@@ -258,3 +258,4 @@ latents/
 wandb/
 onelogger.err
 onelogger.log
+/aha-wam-runs/
