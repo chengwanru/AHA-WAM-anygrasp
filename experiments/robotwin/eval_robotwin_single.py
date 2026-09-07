@@ -299,7 +299,7 @@ def main(cfg: DictConfig):
 
     # RoboTwin calls bare "ffmpeg"; ensure dataset/.../bin is on PATH for workers.
     ffmpeg_bin_dir = _resolve_path_with_fallbacks(
-        "/home/ma-user/work/dataset/cwr_wulan_aha/bin",
+        "/home/ma-user/work/dataset/cwr_dataset_wulann/bin",
         base=PROJECT_ROOT,
     )
     if (ffmpeg_bin_dir / "ffmpeg").exists():
@@ -339,11 +339,11 @@ def main(cfg: DictConfig):
         sapien_vulkan_dir = Path(sysconfig.get_path("purelib")) / "sapien" / "vulkan_library"
 
     nvidia_driver_dir = _resolve_path_with_fallbacks(
-        "/home/ma-user/work/dataset/cwr_wulan_aha/nvidia-driver-libs/nvidia-535.183.01",
+        "/home/ma-user/work/dataset/cwr_dataset_wulann/nvidia-driver-libs/nvidia-535.183.01",
         base=PROJECT_ROOT,
     )
     sapien_libs_dir = _resolve_path_with_fallbacks(
-        "/home/ma-user/work/dataset/cwr_wulan_aha/sapien-runtime-libs",
+        "/home/ma-user/work/dataset/cwr_dataset_wulann/sapien-runtime-libs",
         base=PROJECT_ROOT,
     )
     sapien_vulkan_lib = sapien_vulkan_dir / "libvulkan.so.1.3.224"

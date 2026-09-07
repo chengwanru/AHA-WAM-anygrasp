@@ -11,15 +11,15 @@ import subprocess
 import time
 from pathlib import Path
 
-PROJECT_ROOT = Path("/home/ma-user/work/dataset/cwr_wulan_aha/AHA-WAM-anygrasp")
+PROJECT_ROOT = Path("/home/ma-user/work/dataset/cwr_dataset_wulann/AHA-WAM-anygrasp")
 EVAL_ENTRY = PROJECT_ROOT / "experiments/robotwin/eval_robotwin_single.py"
 OUTPUT_BASE = Path(
-    "/home/ma-user/work/dataset/cwr_wulan_aha/aha-wam-runs/robotwin/video_dit_skip_phase_smoke_v2"
+    "/home/ma-user/work/dataset/cwr_dataset_wulann/aha-wam-runs/robotwin/video_dit_skip_phase_smoke_v2"
 )
 LOG = Path("/tmp/run_skip_phase_smoke_local.log")
 PYTHON = "/opt/huawei/miniconda/envs/python39/envs/ahawam/bin/python"
 AHAWAM_LIB = "/opt/huawei/miniconda/envs/python39/envs/ahawam/lib"
-DATA = "/home/ma-user/work/dataset/cwr_wulan_aha"
+DATA = "/home/ma-user/work/dataset/cwr_dataset_wulann"
 
 TASK = os.environ.get("SMOKE_TASK", "place_mouse_pad")
 NUM_EPISODES = int(os.environ.get("SMOKE_NUM_EPISODES", "5"))

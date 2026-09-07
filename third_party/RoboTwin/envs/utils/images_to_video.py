@@ -15,8 +15,8 @@ def resolve_ffmpeg_exe() -> str:
     if which:
         candidates.append(which)
     for root in (
-        Path("/opt/huawei/dataset/cwr_wulan_aha"),
-        Path("/home/ma-user/work/dataset/cwr_wulan_aha"),
+        Path("/opt/huawei/dataset/cwr_dataset_wulann"),
+        Path("/home/ma-user/work/dataset/cwr_dataset_wulann"),
     ):
         candidates.append(str(root / "bin" / "ffmpeg"))
         candidates.append(str(root / "ffmpeg-bin" / "ffmpeg"))
@@ -31,7 +31,7 @@ def resolve_ffmpeg_exe() -> str:
         if c and os.path.isfile(c) and os.access(c, os.X_OK):
             return c
     raise FileNotFoundError(
-        "ffmpeg not found. Expected cwr_wulan_aha/bin/ffmpeg or imageio_ffmpeg binary."
+        "ffmpeg not found. Expected cwr_dataset_wulann/bin/ffmpeg or imageio_ffmpeg binary."
     )
 
 

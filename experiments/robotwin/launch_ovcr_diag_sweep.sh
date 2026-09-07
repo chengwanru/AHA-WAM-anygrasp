@@ -2,8 +2,8 @@
 # Launch OVCR diagnostic probe sweep on 2 local GPUs (~10h budget).
 set -euo pipefail
 
-ROOT="/home/ma-user/work/dataset/cwr_wulan_aha/AHA-WAM-anygrasp"
-OUT="/home/ma-user/work/dataset/cwr_wulan_aha/aha-wam-runs/robotwin/ovcr改进"
+ROOT="/home/ma-user/work/dataset/cwr_dataset_wulann/AHA-WAM-anygrasp"
+OUT="/home/ma-user/work/dataset/cwr_dataset_wulann/aha-wam-runs/robotwin/ovcr改进"
 LOG="/tmp/ovcr_diag_sweep.log"
 PYTHON="${PYTHON:-/opt/huawei/miniconda/envs/python39/bin/python}"
 

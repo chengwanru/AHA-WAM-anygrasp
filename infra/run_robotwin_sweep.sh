@@ -15,11 +15,11 @@ export NNPU="${MA_NUM_GPUS:-${NNPU:-8}}"
 NUM_EPISODES="${NUM_EPISODES:-40}"
 
 if [[ -d "/opt/huawei/dataset" ]]; then
-    DEFAULT_OUTPUT_DIR="/opt/huawei/dataset/cwr_wulan_aha/aha-wam-runs/robotwin_ahawam_sweep_20tasks_40eps"
-    _FFMPEG_BIN="/opt/huawei/dataset/cwr_wulan_aha/bin"
+    DEFAULT_OUTPUT_DIR="/opt/huawei/dataset/cwr_dataset_wulann/aha-wam-runs/robotwin_ahawam_sweep_20tasks_40eps"
+    _FFMPEG_BIN="/opt/huawei/dataset/cwr_dataset_wulann/bin"
 else
-    DEFAULT_OUTPUT_DIR="/home/ma-user/work/dataset/cwr_wulan_aha/aha-wam-runs/robotwin_ahawam_sweep_20tasks_40eps"
-    _FFMPEG_BIN="/home/ma-user/work/dataset/cwr_wulan_aha/bin"
+    DEFAULT_OUTPUT_DIR="/home/ma-user/work/dataset/cwr_dataset_wulann/aha-wam-runs/robotwin_ahawam_sweep_20tasks_40eps"
+    _FFMPEG_BIN="/home/ma-user/work/dataset/cwr_dataset_wulann/bin"
 fi
 if [[ -x "${_FFMPEG_BIN}/ffmpeg" ]]; then
     export PATH="${_FFMPEG_BIN}:${PATH}"
