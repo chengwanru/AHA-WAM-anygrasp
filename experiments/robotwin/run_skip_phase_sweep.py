@@ -23,9 +23,9 @@ from pathlib import Path
 PROJECT_ROOT = Path(
     os.environ.get(
         "AHA_WAM_CODE_DIR",
-        "/opt/huawei/dataset/cwr_wulan_aha/AHA-WAM-anygrasp"
-        if Path("/opt/huawei/dataset/cwr_wulan_aha/AHA-WAM-anygrasp").exists()
-        else "/home/ma-user/work/dataset/cwr_wulan_aha/AHA-WAM-anygrasp",
+        "/opt/huawei/dataset/cwr_dataset_wulann/AHA-WAM-anygrasp"
+        if Path("/opt/huawei/dataset/cwr_dataset_wulann/AHA-WAM-anygrasp").exists()
+        else "/home/ma-user/work/dataset/cwr_dataset_wulann/AHA-WAM-anygrasp",
     )
 ).resolve()
 EVAL_ENTRY = PROJECT_ROOT / "experiments" / "robotwin" / "eval_robotwin_single.py"
@@ -96,9 +96,9 @@ TASK_ETA_HOURS = {
 DEFAULT_OUTPUT = Path(
     os.environ.get(
         "SKIP_PHASE_OUTPUT_DIR",
-        "/opt/huawei/dataset/cwr_wulan_aha/aha-wam-runs/robotwin/video_dit_skip_phase_40eps_v2"
+        "/opt/huawei/dataset/cwr_dataset_wulann/aha-wam-runs/robotwin/video_dit_skip_phase_40eps_v2"
         if Path("/opt/huawei/dataset").exists()
-        else "/home/ma-user/work/dataset/cwr_wulan_aha/aha-wam-runs/robotwin/video_dit_skip_phase_40eps_v2",
+        else "/home/ma-user/work/dataset/cwr_dataset_wulann/aha-wam-runs/robotwin/video_dit_skip_phase_40eps_v2",
     )
 )
 
@@ -106,8 +106,8 @@ DEFAULT_OUTPUT = Path(
 # Prefer both platform and explore mounts — /opt may exist but lack run dirs.
 BASELINE_REUSE_ROOTS = []
 for _base in (
-    Path("/opt/huawei/dataset/cwr_wulan_aha"),
-    Path("/home/ma-user/work/dataset/cwr_wulan_aha"),
+    Path("/opt/huawei/dataset/cwr_dataset_wulann"),
+    Path("/home/ma-user/work/dataset/cwr_dataset_wulann"),
 ):
     for _sweep in (
         "aha-wam-runs/robotwin_ahawam_sweep_20tasks_40eps/ah64_cpp2",

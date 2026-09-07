@@ -25,7 +25,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 EVAL_ENTRY = PROJECT_ROOT / "experiments" / "robotwin" / "eval_robotwin_single.py"
 DEFAULT_OUTPUT = Path(
-    "/home/ma-user/work/dataset/cwr_wulan_aha/aha-wam-runs/robotwin/ovcr改进"
+    "/home/ma-user/work/dataset/cwr_dataset_wulann/aha-wam-runs/robotwin/ovcr改进"
 )
 
 # Estimated wall minutes for 5 episodes @ ah64_cpp2 (from prior sweeps).
@@ -66,7 +66,7 @@ def build_env(gpu_id: int, mode: str, log_path: Path) -> dict:
     env["LD_LIBRARY_PATH"] = f"{conda_lib}{os.pathsep}{env.get('LD_LIBRARY_PATH', '')}"
     # Prefer extracted NVIDIA user-space libs used by prior RoboTwin evals.
     nvidia_lib = Path(
-        "/home/ma-user/work/dataset/cwr_wulan_aha/nvidia-driver-libs/nvidia-535.183.01"
+        "/home/ma-user/work/dataset/cwr_dataset_wulann/nvidia-driver-libs/nvidia-535.183.01"
     )
     if nvidia_lib.is_dir():
         env["LD_LIBRARY_PATH"] = f"{nvidia_lib}{os.pathsep}{env['LD_LIBRARY_PATH']}"
@@ -100,7 +100,7 @@ def preflight_cuda() -> None:
         else src_path
     )
     nvidia_lib = Path(
-        "/home/ma-user/work/dataset/cwr_wulan_aha/nvidia-driver-libs/nvidia-535.183.01"
+        "/home/ma-user/work/dataset/cwr_dataset_wulann/nvidia-driver-libs/nvidia-535.183.01"
     )
     if nvidia_lib.is_dir():
         env["LD_LIBRARY_PATH"] = (

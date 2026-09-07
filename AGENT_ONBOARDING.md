@@ -146,6 +146,6 @@ python experiments/robotwin/eval_robotwin_single.py \
 ## 6. 老平台遗留物(仅供考古,不要依赖)
 
 - 旧评测结果:`<repo>/aha-wam-runs/`(sweep summary)和 `evaluate_results/`(逐 episode 输出),已被 gitignore,未迁移
-- 旧 sweep 运行目录:`~/work/algorithm/cwr_wulan2/robotwin_ahawam*/`(2026-08-19 debug 输出)
+- 旧 sweep 运行目录:`~/work/algorithm/cwr_wulan_algorithm/robotwin_ahawam*/`(2026-08-19 debug 输出)
 - `cwr_wulan1/AHA-WAM-anygrasp-transfer/`(28G 拷贝)= 纯冗余,官方源都能重下
 - 监控脚本 `/tmp/monitor_experiments.py`、timing 脚本 `/tmp/run_timing_pair.sh` 属会话临时文件

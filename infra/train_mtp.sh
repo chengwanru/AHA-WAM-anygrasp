@@ -14,8 +14,8 @@ SMOKE=0
 SMOKE_NUM_EPISODES=1
 FULL_NUM_EPISODES=40
 # 输出目录（训练环境挂载路径；脚本也会自动适配探索环境路径）
-HARDCODED_OUTPUT_DIR="/opt/huawei/dataset/cwr_wulan_aha/aha-wam-runs/robotwin_ahawam_smoke"
-HARDCODED_OUTPUT_DIR_FULL="/opt/huawei/dataset/cwr_wulan_aha/aha-wam-runs/robotwin_ahawam_sweep_20tasks_40eps"
+HARDCODED_OUTPUT_DIR="/opt/huawei/dataset/cwr_dataset_wulann/aha-wam-runs/robotwin_ahawam_smoke"
+HARDCODED_OUTPUT_DIR_FULL="/opt/huawei/dataset/cwr_dataset_wulann/aha-wam-runs/robotwin_ahawam_sweep_20tasks_40eps"
 # ================================================================
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -23,27 +23,27 @@ cd "${SCRIPT_DIR}"
 echo "code dir: $(pwd)"
 
 # ---------- 路径（自动探测，无需手动 set）----------
-if [[ -d "/opt/huawei/dataset/cwr_wulan_aha/AHA-WAM-anygrasp" ]]; then
+if [[ -d "/opt/huawei/dataset/cwr_dataset_wulann/AHA-WAM-anygrasp" ]]; then
     export DATA="/opt/huawei/dataset"
-    export AHA_WAM_CODE_DIR="${DATA}/cwr_wulan_aha/AHA-WAM-anygrasp"
+    export AHA_WAM_CODE_DIR="${DATA}/cwr_dataset_wulann/AHA-WAM-anygrasp"
 else
     export DATA="/home/ma-user/work/dataset"
-    export AHA_WAM_CODE_DIR="${DATA}/cwr_wulan_aha/AHA-WAM-anygrasp"
+    export AHA_WAM_CODE_DIR="${DATA}/cwr_dataset_wulann/AHA-WAM-anygrasp"
 fi
 
 if [[ -f "${SCRIPT_DIR}/scripts/run_robotwin_sweep.sh" ]]; then
-    export CWR_WULAN2_DIR="${SCRIPT_DIR}"
-elif [[ -d "${SCRIPT_DIR}/cwr_wulan2" && -f "${SCRIPT_DIR}/cwr_wulan2/scripts/run_robotwin_sweep.sh" ]]; then
-    export CWR_WULAN2_DIR="${SCRIPT_DIR}/cwr_wulan2"
-elif [[ -d "/opt/huawei/schedule-train/algorithm/cwr_wulan2" ]]; then
-    export CWR_WULAN2_DIR="/opt/huawei/schedule-train/algorithm/cwr_wulan2"
+    export CWR_WULAN_ALGO_DIR="${SCRIPT_DIR}"
+elif [[ -d "${SCRIPT_DIR}/cwr_wulan_algorithm" && -f "${SCRIPT_DIR}/cwr_wulan_algorithm/scripts/run_robotwin_sweep.sh" ]]; then
+    export CWR_WULAN_ALGO_DIR="${SCRIPT_DIR}/cwr_wulan_algorithm"
+elif [[ -d "/opt/huawei/schedule-train/algorithm/cwr_wulan_algorithm" ]]; then
+    export CWR_WULAN_ALGO_DIR="/opt/huawei/schedule-train/algorithm/cwr_wulan_algorithm"
 else
-    export CWR_WULAN2_DIR="${SCRIPT_DIR}"
+    export CWR_WULAN_ALGO_DIR="${SCRIPT_DIR}"
 fi
 
-WHEELS_DIR="${DATA}/cwr_wulan_aha/wheels"
+WHEELS_DIR="${DATA}/cwr_dataset_wulann/wheels"
 echo "AHA_WAM_CODE_DIR: ${AHA_WAM_CODE_DIR}"
-echo "CWR_WULAN2_DIR: ${CWR_WULAN2_DIR}"
+echo "CWR_WULAN_ALGO_DIR: ${CWR_WULAN_ALGO_DIR}"
 echo "WHEELS_DIR: ${WHEELS_DIR}"
 
 # ---------- 运行环境变量（CUDA）----------
@@ -95,8 +95,8 @@ echo "Using python: ${PYTHON} ($("${PYTHON}" -V 2>&1))"
 
 # sapien 无头渲染：必须用完整 nvidia-535.183.01（不是精简 lib/）
 # 与 eval_robotwin_single.py 保持一致；ICD 在 sapien 安装后再指向其 vulkan_library
-SAPIEN_LIBS="${DATA}/cwr_wulan_aha/sapien-runtime-libs"
-NVIDIA_DRIVER_DIR="${DATA}/cwr_wulan_aha/nvidia-driver-libs/nvidia-535.183.01"
+SAPIEN_LIBS="${DATA}/cwr_dataset_wulann/sapien-runtime-libs"
+NVIDIA_DRIVER_DIR="${DATA}/cwr_dataset_wulann/nvidia-driver-libs/nvidia-535.183.01"
 _ld_add=()
 if [[ -d "${NVIDIA_DRIVER_DIR}" ]]; then
     _ld_add+=("${NVIDIA_DRIVER_DIR}")
@@ -198,8 +198,8 @@ fi
 
 # RoboTwin eval_policy.py calls bare "ffmpeg" (not imageio's ffmpeg-linux-*).
 # Ship a stable name under dataset/.../bin and put it first on PATH.
-FFMPEG_BIN_DIR="${DATA}/cwr_wulan_aha/bin"
-FFMPEG_STORE="${DATA}/cwr_wulan_aha/ffmpeg-bin"
+FFMPEG_BIN_DIR="${DATA}/cwr_dataset_wulann/bin"
+FFMPEG_STORE="${DATA}/cwr_dataset_wulann/ffmpeg-bin"
 mkdir -p "${FFMPEG_BIN_DIR}" "${FFMPEG_STORE}"
 FFMPEG_EXE=""
 if [[ -x "${FFMPEG_BIN_DIR}/ffmpeg" ]]; then
@@ -255,7 +255,7 @@ print(f"ffmpeg which: {ff}")
 
 # ckpt / stats / wan assets
 data = Path(os.environ["DATA"])
-ckpt = data / "cwr_wulan_model/aha-wam/checkpoints/AHA-WAM-RoboTwin2.0/robotwin_ahawam.pt"
+ckpt = data / "cwr_dataset_wulann/AHA-WAM-anygrasp/checkpoints/AHA-WAM-RoboTwin2.0/robotwin_ahawam.pt"
 stats = ckpt.with_name("dataset_stats.json")
 t5 = Path(os.environ["AHA_WAM_CODE_DIR"]) / "checkpoints/DiffSynth-Studio/Wan-Series-Converted-Safetensors/models_t5_umt5-xxl-enc-bf16.safetensors"
 vae = Path(os.environ["AHA_WAM_CODE_DIR"]) / "checkpoints/DiffSynth-Studio/Wan-Series-Converted-Safetensors/Wan2.2_VAE.safetensors"
@@ -317,6 +317,6 @@ mkdir -p "${OUTPUT_DIR}"
 echo "FINAL OUTPUT_DIR=${OUTPUT_DIR}"
 
 # ---------- 启动 sweep ----------
-cd "${CWR_WULAN2_DIR}"
+cd "${CWR_WULAN_ALGO_DIR}"
 echo "sweep root: $(pwd)"
 bash scripts/run_robotwin_sweep.sh "${OUTPUT_DIR}"

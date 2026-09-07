@@ -9,7 +9,7 @@ Example:
     python experiments/robotwin/batch_eval_for_analysis.py \
         --tasks click_alarmclock open_microwave place_can_basket handover_block \
         --num_episodes 5 \
-        --output_dir /home/ma-user/work/dataset/cwr_wulan_aha/aha-wam-runs/robotwin/batch_analysis
+        --output_dir /home/ma-user/work/dataset/cwr_dataset_wulann/aha-wam-runs/robotwin/batch_analysis
 """
 
 import argparse

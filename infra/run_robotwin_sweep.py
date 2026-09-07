@@ -20,9 +20,9 @@ from pathlib import Path
 PROJECT_ROOT = Path(
     os.environ.get(
         "AHA_WAM_CODE_DIR",
-        "/opt/huawei/dataset/cwr_wulan_aha/AHA-WAM-anygrasp"
-        if Path("/opt/huawei/dataset/cwr_wulan_aha/AHA-WAM-anygrasp").exists()
-        else "/home/ma-user/work/dataset/cwr_wulan_aha/AHA-WAM-anygrasp",
+        "/opt/huawei/dataset/cwr_dataset_wulann/AHA-WAM-anygrasp"
+        if Path("/opt/huawei/dataset/cwr_dataset_wulann/AHA-WAM-anygrasp").exists()
+        else "/home/ma-user/work/dataset/cwr_dataset_wulann/AHA-WAM-anygrasp",
     )
 )
 EVAL_ENTRY = PROJECT_ROOT / "experiments" / "robotwin" / "eval_robotwin_single.py"
@@ -408,7 +408,7 @@ def main():
     parser.add_argument(
         "--output_dir",
         type=str,
-        default="/opt/huawei/dataset/cwr_wulan_aha/aha-wam-runs/robotwin_ahawam_sweep_20tasks_40eps",
+        default="/opt/huawei/dataset/cwr_dataset_wulann/aha-wam-runs/robotwin_ahawam_sweep_20tasks_40eps",
     )
     parser.add_argument("--tasks", nargs="+", default=TASKS)
     parser.add_argument(

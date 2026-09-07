@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # CUDA GPU 任务入口——baseline vs skip_phase（固定 ah64/cpp2，与 ah/cpp sweep 隔离）
-# 提交：算法包仍选 cwr_wulan2，但入口脚本选 train_skip_phase.sh（不要用 train_mtp.sh）。
+# 提交：算法包仍选 cwr_wulan_algorithm，但入口脚本选 train_skip_phase.sh（不要用 train_mtp.sh）。
 # 不要与正在跑的 robotwin_ahawam_sweep_20tasks_40eps 抢同一台机器的 GPU。
 set -euo pipefail
 
@@ -20,8 +20,8 @@ export SKIP_PHASE_BATCH
 
 case "${SKIP_PHASE_BATCH}" in
 batch1)
-    HARDCODED_OUTPUT_DIR="/opt/huawei/dataset/cwr_wulan_aha/aha-wam-runs/robotwin/video_dit_skip_phase_smoke_v2"
-    HARDCODED_OUTPUT_DIR_FULL="/opt/huawei/dataset/cwr_wulan_aha/aha-wam-runs/robotwin/video_dit_skip_phase_40eps_v2"
+    HARDCODED_OUTPUT_DIR="/opt/huawei/dataset/cwr_dataset_wulann/aha-wam-runs/robotwin/video_dit_skip_phase_smoke_v2"
+    HARDCODED_OUTPUT_DIR_FULL="/opt/huawei/dataset/cwr_dataset_wulann/aha-wam-runs/robotwin/video_dit_skip_phase_40eps_v2"
     SKIP_PHASE_TASKS=(
         handover_mic hanging_mug move_stapler_pad place_bread_basket place_mouse_pad
         place_object_basket put_bottles_dustbin stack_blocks_three stack_blocks_two click_bell
@@ -29,8 +29,8 @@ batch1)
     ;;
 batch2)
     echo "train_skip_phase.sh revision: 2026-09-03-skip-phase-v2-batch2"
-    HARDCODED_OUTPUT_DIR="/opt/huawei/dataset/cwr_wulan_aha/aha-wam-runs/robotwin/video_dit_skip_phase_smoke_v2_batch2"
-    HARDCODED_OUTPUT_DIR_FULL="/opt/huawei/dataset/cwr_wulan_aha/aha-wam-runs/robotwin/video_dit_skip_phase_40eps_v2_batch2"
+    HARDCODED_OUTPUT_DIR="/opt/huawei/dataset/cwr_dataset_wulann/aha-wam-runs/robotwin/video_dit_skip_phase_smoke_v2_batch2"
+    HARDCODED_OUTPUT_DIR_FULL="/opt/huawei/dataset/cwr_dataset_wulann/aha-wam-runs/robotwin/video_dit_skip_phase_40eps_v2_batch2"
     SKIP_PHASE_TASKS=(
         pick_dual_bottles pick_diverse_bottles place_a2b_left place_a2b_right move_can_pot
         stack_bowls_three handover_block lift_pot press_stapler turn_switch
@@ -48,15 +48,15 @@ cd "${SCRIPT_DIR}"
 echo "code dir: $(pwd)"
 
 # ---------- 路径（自动探测，无需手动 set）----------
-if [[ -d "/opt/huawei/dataset/cwr_wulan_aha/AHA-WAM-anygrasp" ]]; then
+if [[ -d "/opt/huawei/dataset/cwr_dataset_wulann/AHA-WAM-anygrasp" ]]; then
     export DATA="/opt/huawei/dataset"
-    export AHA_WAM_CODE_DIR="${DATA}/cwr_wulan_aha/AHA-WAM-anygrasp"
+    export AHA_WAM_CODE_DIR="${DATA}/cwr_dataset_wulann/AHA-WAM-anygrasp"
 else
     export DATA="/home/ma-user/work/dataset"
-    export AHA_WAM_CODE_DIR="${DATA}/cwr_wulan_aha/AHA-WAM-anygrasp"
+    export AHA_WAM_CODE_DIR="${DATA}/cwr_dataset_wulann/AHA-WAM-anygrasp"
 fi
 
-WHEELS_DIR="${DATA}/cwr_wulan_aha/wheels"
+WHEELS_DIR="${DATA}/cwr_dataset_wulann/wheels"
 echo "AHA_WAM_CODE_DIR: ${AHA_WAM_CODE_DIR}"
 echo "WHEELS_DIR: ${WHEELS_DIR}"
 echo "SKIP_PHASE_BATCH=${SKIP_PHASE_BATCH} tasks=${#SKIP_PHASE_TASKS[@]}"
@@ -111,8 +111,8 @@ echo "Using python: ${PYTHON} ($("${PYTHON}" -V 2>&1))"
 
 # sapien 无头渲染：必须用完整 nvidia-535.183.01（不是精简 lib/）
 # 与 eval_robotwin_single.py 保持一致；ICD 在 sapien 安装后再指向其 vulkan_library
-SAPIEN_LIBS="${DATA}/cwr_wulan_aha/sapien-runtime-libs"
-NVIDIA_DRIVER_DIR="${DATA}/cwr_wulan_aha/nvidia-driver-libs/nvidia-535.183.01"
+SAPIEN_LIBS="${DATA}/cwr_dataset_wulann/sapien-runtime-libs"
+NVIDIA_DRIVER_DIR="${DATA}/cwr_dataset_wulann/nvidia-driver-libs/nvidia-535.183.01"
 _ld_add=()
 if [[ -d "${NVIDIA_DRIVER_DIR}" ]]; then
     _ld_add+=("${NVIDIA_DRIVER_DIR}")
@@ -214,8 +214,8 @@ fi
 
 # RoboTwin eval_policy.py calls bare "ffmpeg" (not imageio's ffmpeg-linux-*).
 # Ship a stable name under dataset/.../bin and put it first on PATH.
-FFMPEG_BIN_DIR="${DATA}/cwr_wulan_aha/bin"
-FFMPEG_STORE="${DATA}/cwr_wulan_aha/ffmpeg-bin"
+FFMPEG_BIN_DIR="${DATA}/cwr_dataset_wulann/bin"
+FFMPEG_STORE="${DATA}/cwr_dataset_wulann/ffmpeg-bin"
 mkdir -p "${FFMPEG_BIN_DIR}" "${FFMPEG_STORE}"
 FFMPEG_EXE=""
 if [[ -x "${FFMPEG_BIN_DIR}/ffmpeg" ]]; then
@@ -271,7 +271,7 @@ print(f"ffmpeg which: {ff}")
 
 # ckpt / stats / wan assets
 data = Path(os.environ["DATA"])
-ckpt = data / "cwr_wulan_model/aha-wam/checkpoints/AHA-WAM-RoboTwin2.0/robotwin_ahawam.pt"
+ckpt = data / "cwr_dataset_wulann/AHA-WAM-anygrasp/checkpoints/AHA-WAM-RoboTwin2.0/robotwin_ahawam.pt"
 stats = ckpt.with_name("dataset_stats.json")
 t5 = Path(os.environ["AHA_WAM_CODE_DIR"]) / "checkpoints/DiffSynth-Studio/Wan-Series-Converted-Safetensors/models_t5_umt5-xxl-enc-bf16.safetensors"
 vae = Path(os.environ["AHA_WAM_CODE_DIR"]) / "checkpoints/DiffSynth-Studio/Wan-Series-Converted-Safetensors/Wan2.2_VAE.safetensors"
