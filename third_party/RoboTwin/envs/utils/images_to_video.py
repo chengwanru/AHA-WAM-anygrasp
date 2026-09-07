@@ -1,9 +1,38 @@
 import cv2
 import numpy as np
 import os
+import shutil
 import subprocess
 import pickle
 import pdb
+from pathlib import Path
+
+
+def resolve_ffmpeg_exe() -> str:
+    """Resolve a usable ffmpeg binary (RoboTwin calls bare 'ffmpeg')."""
+    candidates = []
+    which = shutil.which("ffmpeg")
+    if which:
+        candidates.append(which)
+    for root in (
+        Path("/opt/huawei/dataset/cwr_wulan_aha"),
+        Path("/home/ma-user/work/dataset/cwr_wulan_aha"),
+    ):
+        candidates.append(str(root / "bin" / "ffmpeg"))
+        candidates.append(str(root / "ffmpeg-bin" / "ffmpeg"))
+        candidates.append(str(root / "ffmpeg-bin" / "ffmpeg-linux-x86_64-v7.0.2"))
+    try:
+        import imageio_ffmpeg
+
+        candidates.append(imageio_ffmpeg.get_ffmpeg_exe())
+    except Exception:
+        pass
+    for c in candidates:
+        if c and os.path.isfile(c) and os.access(c, os.X_OK):
+            return c
+    raise FileNotFoundError(
+        "ffmpeg not found. Expected cwr_wulan_aha/bin/ffmpeg or imageio_ffmpeg binary."
+    )
 
 
 def images_to_video(imgs: np.ndarray, out_path: str, fps: float = 30.0, is_rgb: bool = True) -> None:
@@ -15,9 +44,10 @@ def images_to_video(imgs: np.ndarray, out_path: str, fps: float = 30.0, is_rgb: 
         pixel_format = "rgb24" if is_rgb else "bgr24"
     else:
         pixel_format = "rgba"
+    ffmpeg_bin = resolve_ffmpeg_exe()
     ffmpeg = subprocess.Popen(
         [
-            "ffmpeg",
+            ffmpeg_bin,
             "-y",
             "-loglevel",
             "error",

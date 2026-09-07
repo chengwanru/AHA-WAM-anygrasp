@@ -353,10 +353,35 @@ class MoT(nn.Module):
         chunk_queries: torch.Tensor,
         video_tokens_per_frame: int,
         chunk_index: int = 0,
+        diag_mode: Optional[str] = None,
+        diag_meta: Optional[dict[str, Any]] = None,
     ) -> list[dict[str, torch.Tensor]]:
-        editor = self.chunk_kv_cache_editor
-        if editor is None:
-            raise ValueError("Chunk KV cache editor is not configured.")
+        """Build OVCR-updated first-frame video KV for one action chunk.
+
+        Diagnostic-only knobs (do not change the OVCR algorithm itself):
+          - diag_mode=\"off\": return unedited first-frame KV
+          - diag_mode=\"baseline\"/\"oracle\": run normal OVCR editor
+          - when logging is enabled, append per-layer gate/delta norms
+        """
+        from ahawam.utils.ovcr_diag import (
+            append_ovcr_diag_record,
+            get_ovcr_diag_mode,
+            ovcr_diag_logging_enabled,
+            resolve_ovcr_diag_log_path,
+            summarize_ovcr_update,
+        )
+
+        mode = (
+            str(diag_mode).strip().lower()
+            if diag_mode is not None
+            else get_ovcr_diag_mode(
+                default=str(getattr(self, "ovcr_diag_mode", "baseline"))
+            )
+        )
+        # Oracle uses fresh prefill on the deploy side; keep editor off here so
+        # the upper bound isolates "fresh encode" without residual OVCR edits.
+        effective_mode = "off" if mode == "oracle" else mode
+
         if len(video_kv_cache) != self.num_layers:
             raise ValueError(
                 f"`video_kv_cache` must contain {self.num_layers} layers, got {len(video_kv_cache)}."
@@ -370,18 +395,96 @@ class MoT(nn.Module):
             raise ValueError(
                 f"`chunk_index` out of range: {chunk_index} for {chunk_queries.shape[1]} chunks."
             )
+
         one_chunk_queries = chunk_queries[:, chunk_index : chunk_index + 1]
         updated_cache: list[dict[str, torch.Tensor]] = []
-        for layer_idx, layer_cache in enumerate(video_kv_cache):
-            first_k = layer_cache["k"][:, : int(video_tokens_per_frame)]
-            first_v = layer_cache["v"][:, : int(video_tokens_per_frame)]
-            updated = editor.build_layer_updated_cache(
-                layer_idx=layer_idx,
-                chunk_queries=one_chunk_queries,
-                first_frame_keys=first_k,
-                first_frame_values=first_v,
-            )
-            updated_cache.append({"k": updated["k"][:, 0], "v": updated["v"][:, 0]})
+        layer_summaries: list[dict[str, float]] = []
+        log_enabled = ovcr_diag_logging_enabled()
+
+        if effective_mode == "off":
+            for layer_idx, layer_cache in enumerate(video_kv_cache):
+                first_k = layer_cache["k"][:, : int(video_tokens_per_frame)]
+                first_v = layer_cache["v"][:, : int(video_tokens_per_frame)]
+                updated_cache.append({"k": first_k, "v": first_v})
+                if log_enabled:
+                    layer_summaries.append(
+                        summarize_ovcr_update(
+                            layer_idx=layer_idx,
+                            base_k=first_k,
+                            base_v=first_v,
+                            updated_k=first_k,
+                            updated_v=first_v,
+                            delta_k=None,
+                            delta_v=None,
+                            gate=None,
+                        )
+                    )
+        else:
+            editor = self.chunk_kv_cache_editor
+            if editor is None:
+                raise ValueError("Chunk KV cache editor is not configured.")
+            for layer_idx, layer_cache in enumerate(video_kv_cache):
+                first_k = layer_cache["k"][:, : int(video_tokens_per_frame)]
+                first_v = layer_cache["v"][:, : int(video_tokens_per_frame)]
+                updated = editor.build_layer_updated_cache(
+                    layer_idx=layer_idx,
+                    chunk_queries=one_chunk_queries,
+                    first_frame_keys=first_k,
+                    first_frame_values=first_v,
+                )
+                upd_k = updated["k"][:, 0]
+                upd_v = updated["v"][:, 0]
+                updated_cache.append({"k": upd_k, "v": upd_v})
+                if log_enabled:
+                    gate = None
+                    if getattr(editor, "use_delta_gate", False):
+                        gate = torch.sigmoid(editor.delta_gate[layer_idx])
+                    layer_summaries.append(
+                        summarize_ovcr_update(
+                            layer_idx=layer_idx,
+                            base_k=first_k,
+                            base_v=first_v,
+                            updated_k=upd_k,
+                            updated_v=upd_v,
+                            delta_k=(
+                                updated["delta_k"][:, 0] if "delta_k" in updated else None
+                            ),
+                            delta_v=(
+                                updated["delta_v"][:, 0] if "delta_v" in updated else None
+                            ),
+                            gate=gate,
+                        )
+                    )
+
+        if log_enabled and layer_summaries:
+            gate_vals = [s["gate"] for s in layer_summaries if "gate" in s]
+            k_rels = [s["k_rel_change"] for s in layer_summaries]
+            v_rels = [s["v_rel_change"] for s in layer_summaries]
+            record: dict[str, Any] = {
+                "event": "ovcr_update",
+                "diag_mode": mode,
+                "effective_mode": effective_mode,
+                "chunk_index": int(chunk_index),
+                "num_layers": int(len(layer_summaries)),
+                "k_rel_change_mean": float(sum(k_rels) / max(len(k_rels), 1)),
+                "v_rel_change_mean": float(sum(v_rels) / max(len(v_rels), 1)),
+                "k_rel_change_max": float(max(k_rels) if k_rels else 0.0),
+                "v_rel_change_max": float(max(v_rels) if v_rels else 0.0),
+            }
+            if gate_vals:
+                record["gate_mean"] = float(sum(gate_vals) / len(gate_vals))
+                record["gate_min"] = float(min(gate_vals))
+                record["gate_max"] = float(max(gate_vals))
+            if diag_meta:
+                record.update(diag_meta)
+            # Keep per-layer detail only for a few layers to limit log size.
+            record["layers_sample"] = [
+                layer_summaries[i]
+                for i in (0, len(layer_summaries) // 2, len(layer_summaries) - 1)
+                if 0 <= i < len(layer_summaries)
+            ]
+            append_ovcr_diag_record(resolve_ovcr_diag_log_path(), record)
+
         return updated_cache
 
     def forward_prior_action_with_chunk_updated_kv(

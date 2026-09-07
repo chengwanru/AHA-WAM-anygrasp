@@ -26,6 +26,13 @@ current_file_path = os.path.abspath(__file__)
 parent_directory = os.path.dirname(current_file_path)
 
 
+def _resolve_ffmpeg_exe() -> str:
+    """Absolute ffmpeg path — do not rely on PATH (cluster images often lack it)."""
+    from envs.utils.images_to_video import resolve_ffmpeg_exe
+
+    return resolve_ffmpeg_exe()
+
+
 def class_decorator(task_name):
     envs_module = importlib.import_module(f"envs.{task_name}")
     try:
@@ -217,7 +224,8 @@ def main(usr_args):
                                    test_num=test_num,
                                    video_size=video_size,
                                    instruction_type=instruction_type,
-                                   skip_get_obs_within_replan=skip_get_obs_within_replan)
+                                   skip_get_obs_within_replan=skip_get_obs_within_replan,
+                                   usr_args=usr_args)
     suc_nums.append(suc_num)
 
     topk_success_rate = sorted(suc_nums, reverse=True)[:topk]
@@ -242,11 +250,13 @@ def eval_policy(task_name,
                 test_num=100,
                 video_size=None,
                 instruction_type=None,
-                skip_get_obs_within_replan=False):
+                skip_get_obs_within_replan=False,
+                usr_args=None):
     print(f"\033[34mTask Name: {args['task_name']}\033[0m")
     print(f"\033[34mPolicy Name: {args['policy_name']}\033[0m")
+    usr_args = usr_args or {}
 
-    expert_check = True
+    expert_check = os.environ.get("SKIP_EXPERT_CHECK", "0") not in ("1", "true", "True", "TRUE")
     TASK_ENV.suc = 0
     TASK_ENV.test_num = 0
 
@@ -325,18 +335,24 @@ def eval_policy(task_name,
             now_seed += 1
             print("error occurs !")
             continue
-        episode_info_list = [episode_info["info"]]
-        results = generate_episode_descriptions(args["task_name"], episode_info_list, test_num)
-        instruction = np.random.choice(results[0][instruction_type])
+        if expert_check:
+            episode_info_list = [episode_info["info"]]
+            results = generate_episode_descriptions(args["task_name"], episode_info_list, test_num)
+            instruction = np.random.choice(results[0][instruction_type])
+        else:
+            instruction = f"{args['task_name'].replace('_', ' ')}"
         TASK_ENV.set_instruction(instruction=instruction)  # set language instruction
 
         current_video_path = None
         if TASK_ENV.eval_video_path is not None:
             episode_idx = TASK_ENV.test_num
-            current_video_path = Path(TASK_ENV.eval_video_path) / f"episode{episode_idx}.mp4"
+            # Include pid so parallel jobs never collide on episodeN.mp4
+            current_video_path = (
+                Path(TASK_ENV.eval_video_path) / f"episode{episode_idx}.pid{os.getpid()}.mp4"
+            )
             ffmpeg = subprocess.Popen(
                 [
-                    "ffmpeg",
+                    _resolve_ffmpeg_exe(),
                     "-y",
                     "-loglevel",
                     "error",
@@ -365,6 +381,29 @@ def eval_policy(task_name,
         succ = False
         reset_func(model)
         task_state_history = []
+
+        # Simple open_microwave fallback: if the door stops moving while the
+        # gripper is closed, force the gripper open for a few steps while the
+        # policy continues to move the arm.  This lets the policy re-approach
+        # the handle and re-grasp.  Gated by OPEN_MICROWAVE_FALLBACK.
+        fallback_enabled = (
+            task_name == "open_microwave"
+            and os.environ.get("OPEN_MICROWAVE_FALLBACK", "0") in ("1", "true", "True", "TRUE")
+        )
+        fallback_window = 20
+        fallback_qpos_threshold = 0.01
+        fallback_min_step = 100
+        fallback_open_steps = 10
+        fallback_cooldown = 0
+
+        def _pose_to_lists(pose):
+            """Handle both sapien Pose objects and plain [p,q] lists."""
+            if hasattr(pose, "p") and hasattr(pose, "q"):
+                return pose.p.tolist(), pose.q.tolist()
+            if isinstance(pose, (list, tuple, np.ndarray)) and len(pose) >= 7:
+                return pose[:3].tolist() if hasattr(pose, "tolist") else list(pose[:3]), pose[3:7].tolist() if hasattr(pose, "tolist") else list(pose[3:7])
+            return None, None
+
         while TASK_ENV.take_action_cnt < TASK_ENV.step_lim:
             need_obs = True
             if skip_get_obs_within_replan and hasattr(model, "should_request_observation"):
@@ -381,12 +420,14 @@ def eval_policy(task_name,
                     left_tcp = TASK_ENV.robot.get_left_tcp_pose()
                     right_tcp = TASK_ENV.robot.get_right_tcp_pose()
                     switch_pose = TASK_ENV.switch.get_pose()
+                    left_tcp_p, left_tcp_q = _pose_to_lists(left_tcp)
+                    right_tcp_p, right_tcp_q = _pose_to_lists(right_tcp)
                     task_state_history.append({
                         "step": int(TASK_ENV.take_action_cnt),
-                        "left_tcp_p": left_tcp.p.tolist() if hasattr(left_tcp, "p") else None,
-                        "left_tcp_q": left_tcp.q.tolist() if hasattr(left_tcp, "q") else None,
-                        "right_tcp_p": right_tcp.p.tolist() if hasattr(right_tcp, "p") else None,
-                        "right_tcp_q": right_tcp.q.tolist() if hasattr(right_tcp, "q") else None,
+                        "left_tcp_p": left_tcp_p,
+                        "left_tcp_q": left_tcp_q,
+                        "right_tcp_p": right_tcp_p,
+                        "right_tcp_q": right_tcp_q,
                         "switch_p": switch_pose.p.tolist() if hasattr(switch_pose, "p") else None,
                         "switch_q": switch_pose.q.tolist() if hasattr(switch_pose, "q") else None,
                         "switch_qpos": TASK_ENV.switch.get_qpos().tolist(),
@@ -402,12 +443,14 @@ def eval_policy(task_name,
                     microwave_pose = TASK_ENV.microwave.get_pose()
                     microwave_qpos = TASK_ENV.microwave.get_qpos().tolist()
                     microwave_qlimits = TASK_ENV.microwave.get_qlimits().tolist()
+                    left_tcp_p, left_tcp_q = _pose_to_lists(left_tcp)
+                    right_tcp_p, right_tcp_q = _pose_to_lists(right_tcp)
                     task_state_history.append({
                         "step": int(TASK_ENV.take_action_cnt),
-                        "left_tcp_p": left_tcp.p.tolist() if hasattr(left_tcp, "p") else None,
-                        "left_tcp_q": left_tcp.q.tolist() if hasattr(left_tcp, "q") else None,
-                        "right_tcp_p": right_tcp.p.tolist() if hasattr(right_tcp, "p") else None,
-                        "right_tcp_q": right_tcp.q.tolist() if hasattr(right_tcp, "q") else None,
+                        "left_tcp_p": left_tcp_p,
+                        "left_tcp_q": left_tcp_q,
+                        "right_tcp_p": right_tcp_p,
+                        "right_tcp_q": right_tcp_q,
                         "microwave_p": microwave_pose.p.tolist() if hasattr(microwave_pose, "p") else None,
                         "microwave_q": microwave_pose.q.tolist() if hasattr(microwave_pose, "q") else None,
                         "microwave_qpos": microwave_qpos,
@@ -418,6 +461,28 @@ def eval_policy(task_name,
                 except Exception:
                     pass
 
+            # Detect stuck door and trigger gripper-open fallback.
+            if fallback_enabled and fallback_cooldown == 0 and TASK_ENV.take_action_cnt >= fallback_min_step and len(task_state_history) >= fallback_window:
+                recent = task_state_history[-fallback_window:]
+                qpos_values = [s["microwave_qpos"][0] for s in recent]
+                gripper_values = [s["left_gripper_val"] for s in recent]
+                qpos_stuck = max(qpos_values) - min(qpos_values) < fallback_qpos_threshold
+                gripper_closed = all(g < 0.5 for g in gripper_values)
+                if qpos_stuck and gripper_closed:
+                    print(
+                        f"[open_microwave fallback] detected stuck door at step "
+                        f"{TASK_ENV.take_action_cnt} (qpos range {max(qpos_values)-min(qpos_values):.4f}); "
+                        f"forcing gripper open for {fallback_open_steps} steps"
+                    )
+                    if hasattr(model, "pending_actions"):
+                        model.pending_actions.clear()
+                    model.gripper_override_steps = fallback_open_steps
+                    model.gripper_override_value = 1.0
+                    fallback_cooldown = fallback_open_steps + fallback_window
+
+            if fallback_cooldown > 0:
+                fallback_cooldown -= 1
+
             if TASK_ENV.eval_success:
                 succ = True
                 break
@@ -425,13 +490,23 @@ def eval_policy(task_name,
         if TASK_ENV.eval_video_path is not None:
             TASK_ENV._del_eval_video_ffmpeg()
             if current_video_path is None or not current_video_path.exists():
-                raise FileNotFoundError(f"Expected eval video file not found: {current_video_path}")
-            is_randomized = "randomized" in str(args["task_config"]).lower()
-            renamed_video_path = (
-                Path(TASK_ENV.eval_video_path)
-                / f"episode{episode_idx}_randomized-{str(is_randomized).lower()}_success-{str(succ).lower()}.mp4"
-            )
-            current_video_path.rename(renamed_video_path)
+                # Video is diagnostic only — do not abort a successful/failed episode
+                # when ffmpeg output is missing (encoder issues or stale races).
+                print(
+                    f"\033[93m[WARN] eval video missing (skipped): {current_video_path}\033[0m"
+                )
+            else:
+                is_randomized = "randomized" in str(args["task_config"]).lower()
+                renamed_video_path = (
+                    Path(TASK_ENV.eval_video_path)
+                    / f"episode{episode_idx}_randomized-{str(is_randomized).lower()}_success-{str(succ).lower()}.pid{os.getpid()}.mp4"
+                )
+                try:
+                    current_video_path.rename(renamed_video_path)
+                except FileNotFoundError:
+                    print(
+                        f"\033[93m[WARN] eval video rename race (skipped): {current_video_path}\033[0m"
+                    )
 
         if succ:
             TASK_ENV.suc += 1
@@ -451,6 +526,10 @@ def eval_policy(task_name,
             prefill_calls = max(int(round(float(timing.get("prefill_calls", 0.0)))), 0)
             action_chunk_s = float(timing.get("action_chunk_s", 0.0))
             action_chunk_calls = max(int(round(float(timing.get("action_chunk_calls", 0.0)))), 0)
+            skipped_prefills = max(int(round(float(timing.get("skipped_prefills", 0.0)))), 0)
+            prefill_decisions = max(int(round(float(timing.get("prefill_decisions", 0.0)))), 1)
+            skipped_prefill_ratio = skipped_prefills / prefill_decisions
+            skipped_steps = max(int(round(float(timing.get("skipped_steps", 0.0)))), 0)
             chunk_timing_parts = []
             for chunk_idx in range(1, 5):
                 chunk_s = float(timing.get(f"chunk_{chunk_idx}_s", 0.0))
@@ -461,6 +540,26 @@ def eval_policy(task_name,
                     f"chunk{chunk_idx}_avg_s={chunk_avg_s:.6f} | "
                     f"chunk{chunk_idx}_calls={chunk_calls}"
                 )
+
+            prefill_sub_calls = max(int(round(float(timing.get("prefill_sub_calls", 0.0)))), 1)
+            chunk_sub_calls = max(int(round(float(timing.get("chunk_sub_calls", 0.0)))), 1)
+            sub_timing_parts = [
+                f"prefill_prepare_s={float(timing.get('prefill_prepare_s', 0.0)):.6f} | "
+                f"prefill_prepare_avg_s={float(timing.get('prefill_prepare_s', 0.0)) / prefill_sub_calls:.6f}",
+                f"prefill_vae_encode_s={float(timing.get('prefill_vae_encode_s', 0.0)):.6f} | "
+                f"prefill_vae_encode_avg_s={float(timing.get('prefill_vae_encode_s', 0.0)) / prefill_sub_calls:.6f}",
+                f"prefill_video_pre_dit_s={float(timing.get('prefill_video_pre_dit_s', 0.0)):.6f} | "
+                f"prefill_video_pre_dit_avg_s={float(timing.get('prefill_video_pre_dit_s', 0.0)) / prefill_sub_calls:.6f}",
+                f"prefill_video_dit_forward_s={float(timing.get('prefill_video_dit_forward_s', 0.0)):.6f} | "
+                f"prefill_video_dit_forward_avg_s={float(timing.get('prefill_video_dit_forward_s', 0.0)) / prefill_sub_calls:.6f}",
+                f"chunk_conditioning_s={float(timing.get('chunk_conditioning_s', 0.0)):.6f} | "
+                f"chunk_conditioning_avg_s={float(timing.get('chunk_conditioning_s', 0.0)) / chunk_sub_calls:.6f}",
+                f"chunk_action_denoise_s={float(timing.get('chunk_action_denoise_s', 0.0)):.6f} | "
+                f"chunk_action_denoise_avg_s={float(timing.get('chunk_action_denoise_s', 0.0)) / chunk_sub_calls:.6f} | "
+                f"chunk_action_denoise_step_avg_s={float(timing.get('chunk_action_denoise_step_avg_s', 0.0)):.6f}",
+                f"chunk_cleanup_s={float(timing.get('chunk_cleanup_s', 0.0)):.6f} | "
+                f"chunk_cleanup_avg_s={float(timing.get('chunk_cleanup_s', 0.0)) / chunk_sub_calls:.6f}",
+            ]
             print(
                 f"Timing | infer_s={infer_s:.6f} | sim_s={sim_s:.6f} | "
                 f"infer_chunk_s={infer_s / infer_calls:.6f} | "
@@ -473,27 +572,93 @@ def eval_policy(task_name,
                 f"action_chunk_avg_s={((action_chunk_s / action_chunk_calls) if action_chunk_calls > 0 else 0.0):.6f} | "
                 f"take_action_cnt={take_action_cnt} | infer_calls={infer_calls} | "
                 f"prefill_calls={prefill_calls} | action_chunk_calls={action_chunk_calls} | "
-                + " | ".join(chunk_timing_parts)
+                f"skipped_prefills={skipped_prefills} | skipped_prefill_ratio={skipped_prefill_ratio:.2%} | "
+                f"skipped_steps={skipped_steps} | "
+                + " | ".join(chunk_timing_parts) + " | "
+                + " | ".join(sub_timing_parts)
             )
 
-            # Save detailed per-episode analysis log
+            # Save detailed per-episode analysis log (latency + skip/phase extras).
+            infer_per_action = (infer_s / take_action_cnt) if take_action_cnt > 0 else 0.0
+            sim_per_action = (sim_s / take_action_cnt) if take_action_cnt > 0 else 0.0
+            infer_per_call = (infer_s / infer_calls) if infer_calls > 0 else 0.0
+            latency = {
+                "infer_s": infer_s,
+                "sim_s": sim_s,
+                "prefill_s": prefill_s,
+                "action_chunk_s": action_chunk_s,
+                "infer_calls": infer_calls,
+                "prefill_calls": prefill_calls,
+                "action_chunk_calls": action_chunk_calls,
+                "take_action_cnt": take_action_cnt,
+                "infer_per_action_s": infer_per_action,
+                "sim_per_action_s": sim_per_action,
+                "infer_s_per_call": infer_per_call,
+                "prefill_s_per_call": (prefill_s / prefill_calls) if prefill_calls > 0 else 0.0,
+                "action_chunk_s_per_call": (
+                    (action_chunk_s / action_chunk_calls) if action_chunk_calls > 0 else 0.0
+                ),
+                # Frequencies derived from closed-loop timing (Hz).
+                "action_hz_policy_only": (take_action_cnt / infer_s) if infer_s > 0 else 0.0,
+                "action_hz_infer_plus_sim": (
+                    (take_action_cnt / (infer_s + sim_s)) if (infer_s + sim_s) > 0 else 0.0
+                ),
+                "chunk_hz": (1.0 / infer_per_call) if infer_per_call > 0 else 0.0,
+                "skipped_prefills": skipped_prefills,
+                "prefill_decisions": prefill_decisions,
+                "skipped_prefill_ratio": skipped_prefill_ratio,
+            }
             episode_log = {
                 "task_name": task_name,
+                "task_config": args.get("task_config"),
+                "policy_name": args.get("policy_name"),
+                "ckpt_setting": str(args.get("ckpt_setting")),
+                "instruction_type": instruction_type,
+                "action_horizon": usr_args.get("action_horizon"),
+                "chunks_per_video_prefill": usr_args.get("chunks_per_video_prefill"),
+                "num_inference_steps": usr_args.get("num_inference_steps"),
+                "eval_output_dir": str(usr_args.get("eval_output_dir", "")),
                 "episode_idx": int(episode_idx),
                 "seed": int(now_seed),
                 "success": bool(succ),
                 "num_steps": int(take_action_cnt),
+                "step_lim": int(getattr(TASK_ENV, "step_lim", -1) or -1),
+                "video_dit_mode": os.environ.get("VIDEO_DIT_MODE", "baseline"),
+                "ovcr_diag_mode": os.environ.get("OVCR_DIAG_MODE", "baseline"),
                 "timing": timing,
+                "latency": latency,
                 "task_state_history": task_state_history,
             }
-            if callable(step_log_getter):
-                episode_log["step_log"] = step_log_getter()
+            step_log = step_log_getter() if callable(step_log_getter) else None
+            if step_log is not None:
+                episode_log["step_log"] = step_log
+                # Aggregate skip_phase decisions embedded in step_log (if any).
+                phase_counts = {}
+                skip_true = 0
+                skip_n = 0
+                for s in step_log:
+                    sp = s.get("skip_phase") if isinstance(s, dict) else None
+                    if not isinstance(sp, dict):
+                        continue
+                    ph = str(sp.get("phase", "UNKNOWN"))
+                    phase_counts[ph] = phase_counts.get(ph, 0) + 1
+                    if "skip" in sp:
+                        skip_n += 1
+                        if sp.get("skip"):
+                            skip_true += 1
+                episode_log["skip_phase_summary"] = {
+                    "phase_step_counts": phase_counts,
+                    "skip_decisions": skip_n,
+                    "skip_true": skip_true,
+                    "skip_ratio_among_decisions": (skip_true / skip_n) if skip_n else 0.0,
+                }
             analysis_dir = Path(str(usr_args.get("eval_output_dir", "."))) / "analysis"
             analysis_dir.mkdir(parents=True, exist_ok=True)
             log_path = analysis_dir / f"episode{episode_idx}_analysis.json"
             try:
                 with open(log_path, "w", encoding="utf-8") as f:
                     json.dump(episode_log, f, indent=2, default=str)
+                print(f"[analysis] wrote {log_path}")
             except Exception as e:
                 print(f"Warning: failed to write episode analysis log: {e}")
         else:
