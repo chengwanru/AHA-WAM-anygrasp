@@ -4,7 +4,8 @@
 > 目录约定、环境搭建、模型资产、任务提交流程、以及我们踩过的所有坑。
 > 最后更新:2026-09-07
 >
-> **真正训练 / 短 finetune / 平台训练入口怎么写** → 见 [`AGENT_TRAINING.md`](./AGENT_TRAINING.md)。
+> **真正训练 / 短 finetune / 平台训练入口怎么写** → 见 [`AGENT_TRAINING.md`](./AGENT_TRAINING.md)。  
+> **全部实验结果总结（ah/cpp + skip_phase 主表）** → 见 [`EXPERIMENT_RESULTS_SUMMARY.md`](./EXPERIMENT_RESULTS_SUMMARY.md)。
 
 ---
 
