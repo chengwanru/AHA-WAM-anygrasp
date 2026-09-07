@@ -1,39 +1,87 @@
-# AHA-WAM RoboTwin 实验总结（全量）
+# AHA-WAM RoboTwin — Experiment Settings & Results (Complete)
 
-> 汇总本项目在 RoboTwin 2.0 + 官方 released ckpt（eager PyTorch，A800）上的评测实验。
-> **未包含论文 TensorRT / CUDA Graph / Flash 加速栈**（开源评测路径未提供）。
-> 原始产物在 dataset：`aha-wam-runs/`（未进 git）。
-> 日期：2026-09-07
+Date: 2026-09-07
 
----
-
-## 0. 一句话结论
-
-1. **ah/cpp sweep（20 任务 × 6 配置 × 40 ep）已全部跑完**：在 ah=64 上 cpp1/2/3 平均成功率约 **35.6% / 40.5% / 38.3%**，任务间谁好谁坏交错，**没有稳定单调趋势**；默认 **cpp=2** 均值最高。
-2. **skip_phase v2（固定 ah64/cpp2）**：相对 baseline，**单次 L_chunk / L_prefill 基本不变**；真正收益是 **prefill 次数与每集 prefill 总时间下降**（约 30% 量级）。成功率有升有降，整体略损。
-3. **延迟口径**：L_chunk ≈ 单次 action-chunk 推理（常态 ~450–500 ms ≈ 2 Hz，接近论文 eager ~416 ms，远低于论文优化后 41 ms）；L_prefill ≈ 单次 video prefill（常态 ~100 ms）。
-4. **主线未做重训**；若怀疑 cpp1/3 不适配，见 `AGENT_TRAINING.md` 短 finetune 方案。
+This doc lists **every experiment directory we ran**, with **settings first**, then **results**.
+Raw artifacts live on dataset disk under `aha-wam-runs/` (not in git).
+Code/entrypoints: fork `chengwanru/AHA-WAM-anygrasp` branch `modified-working` / `main`.
 
 ---
 
-## 1. 实验版图
+## A. Shared settings (all formal evals unless noted)
 
-| 实验 | 配置 | 输出目录 | 状态 |
-|---|---|---|---|
-| ah/cpp sweep | 20 tasks × {ah64_cpp2, ah64_cpp1, ah64_cpp3, ah32_cpp2, ah32_cpp1, ah16_cpp1} × 40 ep | `aha-wam-runs/robotwin_ahawam_sweep_20tasks_40eps/` | **20/20 齐全** |
-| skip_phase v2 | ah64/cpp2；远场可 skip、近场≤10cm 不 skip、连续 skip≤1 | `.../video_dit_skip_phase_40eps_v2/` + `_batch2/` | **完整 pair 见下表** |
-| skip_phase v1 | 近场 6cm、无连续预算 → skip 过高 | `.../video_dit_skip_phase_40eps/` | **已废弃**（成功率崩） |
-| 早期 batch/OVCR/complex 诊断 | 多种 | `aha-wam-runs/robotwin/batch_*`, `ovcr_*`, `complex_*` | 探索性，非正式主表 |
+| Item | Value |
+|---|---|
+| Model / ckpt | Official released `checkpoints/AHA-WAM-RoboTwin2.0/robotwin_ahawam.pt` + same-dir `dataset_stats.json` |
+| Code | AHA-WAM-anygrasp (`modified-working`), RoboTwin via `third_party/RoboTwin` |
+| Benchmark | RoboTwin 2.0 |
+| Task config | `demo_randomized` |
+| Hardware | NVIDIA **A800** (cluster); eager PyTorch (no TensorRT / CUDA Graph / Flash deploy) |
+| Action chunk size | 16 (model fixed) |
+| Denoising steps | `num_inference_steps=10` |
+| Timing | `EVALUATION.timing_enabled=True`, per-episode `analysis/episode*_analysis.json` |
+| Latency metrics | **L_chunk** = one action-chunk forward (`action_chunk_s_per_call`); **Freq** = 1000/L_chunk; **L_prefill** = one video prefill (`prefill_s_per_call`) |
+| Not used | Paper Table-3 optimized stack (TRT+CG+Flash) — not open-sourced in eval path |
 
-入口脚本（名字像 train，实际是评测）：`infra/train_mtp.sh`、`infra/train_skip_phase*.sh`。
+Platform entry scripts are named `train_*.sh` but **run evaluation**, not training.
 
 ---
 
-## 2. Experiment 1 — ah/cpp sweep
+## B. Inventory — all experiment directories
 
-Ckpt：`checkpoints/AHA-WAM-RoboTwin2.0/robotwin_ahawam.pt`；`demo_randomized`；40 episodes。
+| Directory under `aha-wam-runs/` | Role | Notes |
+|---|---|---|
+| `robotwin_ahawam_sweep_20tasks_40eps` | **MAIN** | ah/cpp full sweep 20×6×40 (yes) |
+| `robotwin_ahawam_sweep_40tasks_40eps` | **EARLY/PARTIAL** | earlier wider task list; superseded by 20-task formal sweep (yes) |
+| `robotwin/video_dit_skip_phase_40eps_v2` | **MAIN** | skip_phase v2 batch1 (yes) |
+| `robotwin/video_dit_skip_phase_40eps_v2_batch2` | **MAIN** | skip_phase v2 batch2 (yes) |
+| `robotwin/video_dit_skip_phase_40eps` | **DEPRECATED** | skip_phase v1 (too aggressive) (yes) |
+| `robotwin/video_dit_skip_phase_smoke_v2` | **SMOKE** | local/cluster smoke for v2 (yes) |
+| `robotwin/video_dit_skip_approach` | **PILOT** | early skip-on-approach idea, 5ep (yes) |
+| `robotwin/video_dit_skip_approach_batch2` | **PILOT** | skip_approach batch2, 5ep (yes) |
+| `robotwin/video_dit_ablation` | **PILOT** | baseline vs skip_approach, 5ep (yes) |
+| `robotwin/video_dit_skip_all_check` | **PILOT** | skip ALL prefills sanity check (yes) |
+| `robotwin/video_dit_freq_analysis` | **PILOT** | cpp frequency analysis (yes) |
+| `robotwin/ovcr_improve` | **PILOT** | OVCR baseline/off/oracle, 5ep (yes) |
+| `robotwin/ovcr改进` | **PILOT** | duplicate/alias of ovcr_improve (yes) |
+| `robotwin/ovcr_improve_collided_20260903_102650` | **FAILED** | collided run (yes) |
+| `robotwin/ovcr改进_failed_hydra_20260903_095133` | **FAILED** | hydra failure (yes) |
+| `robotwin/complex_tasks_sweep_gpu0` | **PILOT** | early complex-task ah/cpp, fewer tasks (yes) |
+| `robotwin/complex_tasks_sweep_gpu1` | **PILOT** | early complex-task ah/cpp (yes) |
+| `robotwin/param_sweep_place_phone_stand` | **PILOT** | place_phone_stand 5ep×5 cfg (yes) |
+| `robotwin/param_sweep_missing_tasks` | **PILOT** | missing-task patch runs (yes) |
+| `robotwin/batch_analysis_pilot` | **DIAG** | early batch analysis logs (yes) |
+| `robotwin/batch_analysis_pilot_v2` | **DIAG** | batch analysis v2 (yes) |
+| `robotwin/batch_analysis_round2` | **DIAG** | batch analysis round2 (yes) |
+| `robotwin/batch_analysis_clean` | **DIAG** | cleaned batch analysis (yes) |
+| `robotwin/batch_analysis_combined` | **DIAG** | combined analysis dumps (yes) |
+| `robotwin/batch_analysis_turn_switch_extended` | **DIAG** | turn_switch extended logs (yes) |
+| `robotwin/open_microwave_clean_diagnostic` | **DIAG** | open_microwave debug (yes) |
+| `robotwin/open_microwave_tcp_diagnostic` | **DIAG** | open_microwave TCP debug (yes) |
+| `robotwin/consolidated_table` | **META** | table drafts (yes) |
 
-### 2.1 Success rate
+**MAIN** = formal conclusions. **PILOT/DIAG** = exploratory (small N or superseded). **DEPRECATED/FAILED** = do not use for claims.
+
+---
+
+## C. MAIN-1: ah / cpp parameter sweep
+
+### C.1 Settings
+
+| Item | Value |
+|---|---|
+| Entrypoint | `infra/train_mtp.sh` → `infra/run_robotwin_sweep.{sh,py}` |
+| Output | `aha-wam-runs/robotwin_ahawam_sweep_20tasks_40eps/` |
+| Episodes / job | **40** |
+| GPUs | typically 8× A800, one job per GPU |
+| Configs (6) | `(ah,cpp) ∈ {(64,2),(64,1),(64,3),(32,2),(32,1),(16,1)}` |
+| Tasks (20) | pick_dual_bottles, pick_diverse_bottles, place_bread_basket, place_object_basket, place_a2b_left, place_a2b_right, move_can_pot, move_stapler_pad, stack_blocks_two, stack_bowls_three, handover_block, handover_mic, hanging_mug, click_bell, press_stapler, turn_switch, lift_pot, beat_block_hammer, open_laptop, open_microwave |
+| Total jobs | 20 × 6 = **120** (all complete) |
+| VIDEO_DIT_MODE | baseline (normal prefill schedule; no skip_phase) |
+| Meaning of ah | `action_horizon`: actions covered before planner horizon rolls |
+| Meaning of cpp | `chunks_per_video_prefill`: how many action chunks reuse one video prefill |
+
+### C.2 Results — success rate
 
 | Task | ah=64, cpp=2 | ah=64, cpp=1 | ah=64, cpp=3 | ah=32, cpp=2 | ah=32, cpp=1 | ah=16, cpp=1 |
 |---|---:|---:|---:|---:|---:|---:|
@@ -59,9 +107,9 @@ Ckpt：`checkpoints/AHA-WAM-RoboTwin2.0/robotwin_ahawam.pt`；`demo_randomized`�
 | Open Microwave | 0/40 (0.0%) | 0/40 (0.0%) | 2/40 (5.0%) | 0/40 (0.0%) | 0/40 (0.0%) | 0/40 (0.0%) |
 | **Mean (20)** | **40.5%** | **35.6%** | **38.2%** | **40.5%** | **35.6%** | **35.6%** |
 
-观察：同一任务上 cpp1/2/3 常互相领先；**ah=32/16 与 ah=64 在相同 cpp 上成功率高度相似**（部署调度主导差异大于 horizon 本身时会出现）。
+**Takeaway:** on ah=64, mean success cpp1/2/3 ≈ **35.6% / 40.5% / 38.3%** — flat, no monotonic cpp trend; **cpp=2** highest mean.
 
-### 2.2 L_chunk（单次 action-chunk，ms / Hz）
+### C.3 Results — L_chunk (ms / Hz)
 
 | Task | ah=64, cpp=2 | ah=64, cpp=1 | ah=64, cpp=3 | ah=32, cpp=2 | ah=32, cpp=1 | ah=16, cpp=1 |
 |---|---:|---:|---:|---:|---:|---:|
@@ -86,7 +134,7 @@ Ckpt：`checkpoints/AHA-WAM-RoboTwin2.0/robotwin_ahawam.pt`；`demo_randomized`�
 | Open Laptop | — | — | — | — | — | — |
 | Open Microwave | 460.4 ms (2.17 Hz) | 450.7 ms (2.22 Hz) | 749.6 ms (1.33 Hz) | 759.8 ms (1.32 Hz) | 441.0 ms (2.27 Hz) | 440.0 ms (2.27 Hz) |
 
-### 2.3 L_prefill（单次 video prefill，ms）
+### C.4 Results — L_prefill (ms)
 
 | Task | ah=64, cpp=2 | ah=64, cpp=1 | ah=64, cpp=3 | ah=32, cpp=2 | ah=32, cpp=1 | ah=16, cpp=1 |
 |---|---:|---:|---:|---:|---:|---:|
@@ -111,7 +159,7 @@ Ckpt：`checkpoints/AHA-WAM-RoboTwin2.0/robotwin_ahawam.pt`；`demo_randomized`�
 | Open Laptop | — | — | — | — | — | — |
 | Open Microwave | 100.7 | 98.0 | 166.7 | 169.5 | 96.4 | 97.1 |
 
-### 2.4 Prefill calls / episode（cpp 影响更明显）
+### C.5 Results — prefill calls / episode
 
 | Task | ah=64, cpp=2 | ah=64, cpp=1 | ah=64, cpp=3 | ah=32, cpp=2 | ah=32, cpp=1 | ah=16, cpp=1 |
 |---|---:|---:|---:|---:|---:|---:|
@@ -137,21 +185,35 @@ Ckpt：`checkpoints/AHA-WAM-RoboTwin2.0/robotwin_ahawam.pt`；`demo_randomized`�
 | Open Microwave | 47.0 | 94.0 | 31.1 | 47.0 | 94.0 | 94.0 |
 | **Mean** | **14.3** | **29.3** | **9.9** | **14.3** | **29.3** | **29.3** |
 
-规律：单次 L_prefill 各配置接近；**cpp 越大，每集 prefill 次数越少**。
+**Takeaway:** unit L_prefill ~100 ms across configs; **cpp mainly changes call count** (cpp=3 fewer refreshes).
 
 ---
 
-## 3. Experiment 2 — skip_phase v2
+## D. MAIN-2: skip_phase v2 (baseline vs skip)
 
-固定 **ah=64, cpp=2**。只跳过 video prefill；Action DiT / OVCR 仍每 chunk 运行。
+### D.1 Settings
 
-规则摘要：
-- REACH / TRANSPORT：距 grasp/place **>10 cm** 可 skip；**≤10 cm** 必须 refresh
-- PLACE（抓住且靠近放置点）：不 skip
-- 连续 skip 最多 1 次（≈≤50%）
-- 距离：左右 TCP 与任务配置物体 GT 位姿的最小欧氏距离（米）
+| Item | Value |
+|---|---|
+| Entrypoint | `infra/train_skip_phase.sh` / `train_skip_phase_batch2.sh` (NOT `train_mtp.sh`) |
+| Output batch1 | `.../robotwin/video_dit_skip_phase_40eps_v2/` |
+| Output batch2 | `.../robotwin/video_dit_skip_phase_40eps_v2_batch2/` |
+| Episodes | **40** |
+| Fixed ah / cpp | **ah=64, cpp=2** (locked; not swept) |
+| Modes | `baseline` vs `VIDEO_DIT_MODE=skip_phase` |
+| What is skipped | **video prefill only**; Action DiT + OVCR still every chunk |
+| Near threshold | **0.10 m (10 cm)** TCP↔target |
+| Distance | min Euclidean over left/right TCP × grasp/place GT actor poses |
+| Max consecutive skips | **1** (≈ ≤50% when always eligible) |
+| OVCR | `OVCR_DIAG_MODE=baseline` required when skipping |
+| Holding latch | open→close gripper + TCP↔grasp ≤8 cm; drop if open or object >15 cm |
+| Phases | REACH (not holding): skip if far from grasp; TRANSPORT (holding, far from place): skip if far; PLACE (holding+near place): never skip |
+| Contact tasks | click_bell / press_stapler / turn_switch: far/near vs contact target only |
+| Batch1 tasks (10) | handover_mic, hanging_mug, move_stapler_pad, place_bread_basket, place_mouse_pad, place_object_basket, put_bottles_dustbin, stack_blocks_three, stack_blocks_two, click_bell |
+| Batch2 tasks (10) | pick_dual_bottles, pick_diverse_bottles, place_a2b_left, place_a2b_right, move_can_pot, stack_bowls_three, handover_block, lift_pot, press_stapler, turn_switch |
+| Baseline reuse | if present, reuse ah64_cpp2 from MAIN-1 |
 
-### 3.1 Success + skip%
+### D.2 Results — success + skip%
 
 | Task | baseline | skip_phase | skip% |
 |---|---:|---:|---:|
@@ -176,32 +238,32 @@ Ckpt：`checkpoints/AHA-WAM-RoboTwin2.0/robotwin_ahawam.pt`；`demo_randomized`�
 | Turn Switch | 21/40 (52.5%) | 21/40 (52.5%) | 26.9% |
 | **Mean (19)** | **42.0%** | **37.5%** |  |
 
-### 3.2 Prefill 次数 / 时间（加速应看这里，不是 L_chunk）
+### D.3 Results — prefill savings (this is the speedup signal)
 
-| Task | baseline L_prefill | skip L_prefill | baseline prefill/ep | skip prefill/ep | calls ↓ | baseline prefill_s/ep | skip prefill_s/ep | time ↓ |
+| Task | base L_prefill | skip L_prefill | base calls/ep | skip calls/ep | calls↓ | base prefill_s/ep | skip prefill_s/ep | time↓ |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| Handover Microphone | 100.2 ms | 101.1 ms | 15.9 | 13.2 | 16.9% | 1.60s | 1.34s | 16.3% |
-| Hanging Mug | 101.8 ms | 104.2 ms | 22.2 | 13.0 | 41.4% | 2.26s | 1.36s | 40.0% |
-| Move Stapler Pad | 100.0 ms | 104.1 ms | 12.8 | 9.6 | 25.4% | 1.28s | 0.99s | 22.3% |
-| Place Bread Basket | 96.9 ms | 98.6 ms | 11.2 | 9.1 | 18.9% | 1.09s | 0.90s | 17.2% |
-| Place Mouse Pad | 100.2 ms | 98.1 ms | 9.2 | 9.2 | -0.5% | 0.92s | 0.91s | 1.5% |
-| Place Object Basket | 96.9 ms | 103.1 ms | 19.9 | 10.2 | 48.5% | 1.92s | 1.05s | 45.2% |
-| Stack Blocks Three | 100.3 ms | 97.5 ms | 34.0 | 30.9 | 9.1% | 3.42s | 3.01s | 11.8% |
-| Stack Blocks Two | 99.9 ms | 96.8 ms | 16.6 | 14.4 | 13.3% | 1.66s | 1.39s | 16.1% |
-| Click Bell | 101.4 ms | 101.6 ms | 6.5 | 4.7 | 27.0% | 0.66s | 0.48s | 26.5% |
-| Pick Dual Bottles | 101.0 ms | 95.9 ms | 5.8 | 3.7 | 35.8% | 0.59s | 0.36s | 39.0% |
-| Pick Diverse Bottles | 98.4 ms | 101.4 ms | 8.5 | 5.6 | 33.8% | 0.84s | 0.57s | 31.9% |
-| Place Object A to B Left | 167.2 ms | 99.8 ms | 11.2 | 7.2 | 35.4% | 1.88s | 0.72s | 61.5% |
-| Place Object A to B Right | 166.7 ms | 98.2 ms | 12.4 | 6.9 | 44.4% | 2.07s | 0.67s | 67.4% |
-| Move Can Pot | 96.1 ms | 99.3 ms | 9.6 | 6.4 | 33.6% | 0.93s | 0.63s | 31.5% |
-| Stack Bowls Three | 104.1 ms | 102.6 ms | 19.6 | 17.2 | 12.2% | 2.04s | 1.77s | 13.4% |
-| Handover Block | 100.9 ms | 100.1 ms | 23.1 | 13.5 | 41.4% | 2.33s | 1.35s | 41.9% |
-| Lift Pot | 99.0 ms | 100.6 ms | 12.8 | 7.5 | 41.7% | 1.26s | 0.75s | 40.7% |
-| Press Stapler | 98.0 ms | 100.2 ms | 2.8 | 2.3 | 17.0% | 0.28s | 0.23s | 15.1% |
-| Turn Switch | 99.3 ms | 95.5 ms | 7.6 | 7.1 | 6.6% | 0.75s | 0.68s | 9.7% |
+| Handover Microphone | 100.2 | 101.1 | 15.9 | 13.2 | 16.9% | 1.60s | 1.34s | 16.3% |
+| Hanging Mug | 101.8 | 104.2 | 22.2 | 13.0 | 41.4% | 2.26s | 1.36s | 40.0% |
+| Move Stapler Pad | 100.0 | 104.1 | 12.8 | 9.6 | 25.4% | 1.28s | 0.99s | 22.3% |
+| Place Bread Basket | 96.9 | 98.6 | 11.2 | 9.1 | 18.9% | 1.09s | 0.90s | 17.2% |
+| Place Mouse Pad | 100.2 | 98.1 | 9.2 | 9.2 | -0.5% | 0.92s | 0.91s | 1.5% |
+| Place Object Basket | 96.9 | 103.1 | 19.9 | 10.2 | 48.5% | 1.92s | 1.05s | 45.2% |
+| Stack Blocks Three | 100.3 | 97.5 | 34.0 | 30.9 | 9.1% | 3.42s | 3.01s | 11.8% |
+| Stack Blocks Two | 99.9 | 96.8 | 16.6 | 14.4 | 13.3% | 1.66s | 1.39s | 16.1% |
+| Click Bell | 101.4 | 101.6 | 6.5 | 4.7 | 27.0% | 0.66s | 0.48s | 26.5% |
+| Pick Dual Bottles | 101.0 | 95.9 | 5.8 | 3.7 | 35.8% | 0.59s | 0.36s | 39.0% |
+| Pick Diverse Bottles | 98.4 | 101.4 | 8.5 | 5.6 | 33.8% | 0.84s | 0.57s | 31.9% |
+| Place Object A to B Left | 167.2 | 99.8 | 11.2 | 7.2 | 35.4% | 1.88s | 0.72s | 61.5% |
+| Place Object A to B Right | 166.7 | 98.2 | 12.4 | 6.9 | 44.4% | 2.07s | 0.67s | 67.4% |
+| Move Can Pot | 96.1 | 99.3 | 9.6 | 6.4 | 33.6% | 0.93s | 0.63s | 31.5% |
+| Stack Bowls Three | 104.1 | 102.6 | 19.6 | 17.2 | 12.2% | 2.04s | 1.77s | 13.4% |
+| Handover Block | 100.9 | 100.1 | 23.1 | 13.5 | 41.4% | 2.33s | 1.35s | 41.9% |
+| Lift Pot | 99.0 | 100.6 | 12.8 | 7.5 | 41.7% | 1.26s | 0.75s | 40.7% |
+| Press Stapler | 98.0 | 100.2 | 2.8 | 2.3 | 17.0% | 0.28s | 0.23s | 15.1% |
+| Turn Switch | 99.3 | 95.5 | 7.6 | 7.1 | 6.6% | 0.75s | 0.68s | 9.7% |
 | **Mean** |  |  |  |  | **26.4%** |  |  | **28.9%** |
 
-### 3.3 L_chunk（预期两边接近）
+### D.4 Results — L_chunk (should stay ~flat)
 
 | Task | baseline L_chunk | skip_phase L_chunk |
 |---|---:|---:|
@@ -225,51 +287,189 @@ Ckpt：`checkpoints/AHA-WAM-RoboTwin2.0/robotwin_ahawam.pt`；`demo_randomized`�
 | Press Stapler | 461.8 ms (2.17 Hz) | 469.3 ms (2.13 Hz) |
 | Turn Switch | 456.1 ms (2.19 Hz) | 442.1 ms (2.26 Hz) |
 
-说明：skip 不加速 Action DiT；L_chunk 不变是预期现象。
-
-### 3.4 v1（废弃）
-
-v1 近场阈值 6 cm 且无连续 skip 预算 → skip 比例过高，成功率严重下降（例如 Place Mouse Pad 曾从 ~47.5% 掉到 ~0）。**不要用 v1 目录对比。**
-
-v1 曾跑过的 skip_phase 任务（仅存档）：place_mouse_pad 0/40, move_stapler_pad 0/40, click_bell 11/40
+**Takeaway:** skip does not reduce L_chunk (action path unchanged). Report **prefill calls / prefill_s/ep**.
 
 ---
 
-## 4. 延迟与论文对照（避免再混口径）
+## E. DEPRECATED: skip_phase v1
 
-| 量 | 含义 | 我们（A800 eager） | 论文 Table 8 Stage0 eager（5090D） | 论文优化后 |
-|---|---|---|---|---|
-| L_chunk | 一次 action-chunk 端到端 | ~450–500 ms（~2 Hz） | ~415.8 ms | 41.4 ms / Flash 17.6 ms |
-| L_prefill | 一次 video prefill | ~100 ms（个别负载高 ~160+） | ~61.2 ms | 可再降（compile 等） |
-| Freq | 1/L_chunk | ~2 Hz | ~2.4 Hz（eager） | ~24–57 Hz |
+### E.1 Settings
 
-我们 **测了** 自己的 L_prefill / L_chunk；论文 61/41 只作对照，不是我们的数。
+| Item | Value |
+|---|---|
+| Output | `robotwin/video_dit_skip_phase_40eps/` |
+| ah/cpp | 64 / 2 |
+| Near thresh | **0.06 m** |
+| Consecutive skip budget | **none** (could skip almost every eligible step) |
+
+### E.2 Results (partial; do not use)
+
+| Task | mode | success |
+|---|---|---|
+| place_bread_basket | baseline | 29/40 (72.5%) |
+| place_object_basket | baseline | 8/40 (20.0%) |
+| click_bell | baseline | 26/40 (65.0%) |
+| place_mouse_pad | baseline | 19/40 (47.5%) |
+| click_bell | skip_phase | 11/40 (27.5%) |
+| place_mouse_pad | skip_phase | 0/40 (0.0%) |
+| move_stapler_pad | baseline | 1/40 (2.5%) |
+| move_stapler_pad | skip_phase | 0/40 (0.0%) |
+
+Success collapsed when skip%~90% (e.g. Place Mouse Pad ~47.5%→0%). Replaced by v2.
 
 ---
 
-## 5. 其它探索性 run（非正式主结论）
+## F. PILOT / DIAG experiments (settings + compact results)
 
-目录均在 `aha-wam-runs/robotwin/`：`batch_analysis_*`、`complex_tasks_sweep_*`、`ovcr_improve*`、`video_dit_ablation`、`video_dit_skip_approach*`、`open_microwave_*` 等。用于诊断 OVCR / 难任务 / 早期 skip 思路，**主表以 §2–§3 为准**。
+These are **not** the primary claim set (often 5 episodes). Included so the log of what we ran is complete.
+
+### F.1 OVCR diag (`ovcr_improve` / `ovcr改进`)
+
+**Settings:** ah=64, cpp=2, **5 ep**, modes `baseline` / `off` / `oracle` (`OVCR_DIAG_MODE`). Tasks: move_can_pot, place_fan, place_phone_stand, stack_bowls_two/three, turn_switch.
+
+| Task | baseline | off | oracle |
+|---|---:|---:|---:|
+| move_can_pot | 2/5 | 1/5 | 1/5 |
+| place_fan | 5/5 | 5/5 | 0/5 |
+| place_phone_stand | 0/5 | 0/5 | 0/5 |
+| stack_bowls_three | 3/5 | 4/5 | 1/5 |
+| stack_bowls_two | 5/5 | 5/5 | 3/5 |
+| turn_switch | 4/5 | 4/5 | 3/5 |
+
+Failed siblings: `ovcr_improve_collided_*`, `ovcr改进_failed_hydra_*`.
+
+### F.2 Early `skip_approach` / ablation (5 ep)
+
+**Settings:** precursor to skip_phase; skip prefills during approach heuristically. Dirs: `video_dit_ablation`, `video_dit_skip_approach`, `video_dit_skip_approach_batch2`.
+
+**`robotwin/video_dit_ablation/summary.json`**
+
+| Task | baseline | skip_approach |
+|---|---:|---:|
+| open_laptop | 4/5 | 4/5 |
+| pick_diverse_bottles | 5/5 | 5/5 |
+| pick_dual_bottles | 0/5 | 5/5 |
+| place_fan | 5/5 | 3/5 |
+| stack_blocks_three | 2/5 | 2/5 |
+| stack_blocks_two | 2/5 | 2/5 |
+| stack_bowls_three | 5/5 | 5/5 |
+
+**`robotwin/video_dit_skip_approach_batch2/summary.json`**
+
+| Task | baseline | skip_approach |
+|---|---:|---:|
+| handover_mic | 1/5 | 2/5 |
+| hanging_mug | 2/5 | 3/5 |
+| move_stapler_pad | 0/5 | 0/5 |
+| place_bread_basket | 4/5 | 4/5 |
+| place_mouse_pad | 2/5 | 0/5 |
+| place_object_basket | 0/5 | 1/5 |
+| put_bottles_dustbin | 1/5 | 1/5 |
+| stack_blocks_three | 2/5 | 0/5 |
+| stack_blocks_two | 2/5 | 4/5 |
+
+### F.3 `skip_all` check
+
+**Settings:** skip every video prefill (stress test). Dir: `video_dit_skip_all_check`.
+
+- stack_bowls_three baseline: 3/5
+- stack_bowls_three skip_all: 0/5
+
+### F.4 Early complex-task ah/cpp pilots
+
+**Settings:** subset of tasks × ah/cpp (no ah64_cpp3 yet), dirs `complex_tasks_sweep_gpu0/1`. Superseded by MAIN-1.
+
+**`robotwin/complex_tasks_sweep_gpu0/summary.json`** (15 jobs)
+
+| Task | tag | success |
+|---|---|---|
+| open_laptop | ah64_cpp2 | 4/5 |
+| open_laptop | ah64_cpp1 | 4/5 |
+| open_laptop | ah32_cpp2 | 5/5 |
+| open_laptop | ah32_cpp1 | 4/5 |
+| open_laptop | ah16_cpp1 | 4/5 |
+| pick_diverse_bottles | ah64_cpp2 | 5/5 |
+| pick_diverse_bottles | ah64_cpp1 | 5/5 |
+| pick_diverse_bottles | ah32_cpp2 | 5/5 |
+| pick_diverse_bottles | ah32_cpp1 | 5/5 |
+| pick_diverse_bottles | ah16_cpp1 | 5/5 |
+| pick_dual_bottles | ah64_cpp2 | 5/5 |
+| pick_dual_bottles | ah64_cpp1 | 5/5 |
+| pick_dual_bottles | ah32_cpp2 | 4/5 |
+| pick_dual_bottles | ah32_cpp1 | 5/5 |
+| pick_dual_bottles | ah16_cpp1 | 5/5 |
+
+**`robotwin/complex_tasks_sweep_gpu1/summary.json`** (15 jobs)
+
+| Task | tag | success |
+|---|---|---|
+| stack_bowls_two | ah64_cpp2 | 4/5 |
+| stack_bowls_two | ah64_cpp1 | 5/5 |
+| stack_bowls_two | ah32_cpp2 | 5/5 |
+| stack_bowls_two | ah32_cpp1 | 5/5 |
+| stack_bowls_two | ah16_cpp1 | 5/5 |
+| stack_bowls_three | ah64_cpp2 | 2/5 |
+| stack_bowls_three | ah64_cpp1 | 4/5 |
+| stack_bowls_three | ah32_cpp2 | 4/5 |
+| stack_bowls_three | ah32_cpp1 | 5/5 |
+| stack_bowls_three | ah16_cpp1 | 5/5 |
+| place_fan | ah64_cpp2 | 4/5 |
+| place_fan | ah64_cpp1 | 1/5 |
+| place_fan | ah32_cpp2 | 4/5 |
+| place_fan | ah32_cpp1 | 1/5 |
+| place_fan | ah16_cpp1 | 1/5 |
+
+### F.5 `param_sweep_place_phone_stand` (5 ep)
+
+**Settings:** single task place_phone_stand × 5 ah/cpp configs, 5 episodes.
+
+| Config | success |
+|---|---|
+| ah64_cpp2 | 4/5 |
+| ah64_cpp1 | 2/5 |
+| ah32_cpp2 | 4/5 |
+| ah32_cpp1 | 2/5 |
+| ah16_cpp1 | 2/5 |
+
+### F.6 Batch analysis / open_microwave diagnostics
+
+**Settings:** logging / failure analysis dumps, not formal success tables.
+
+| Dir | Purpose |
+|---|---|
+| `robotwin/batch_analysis_pilot` | early multi-task analysis |
+| `robotwin/batch_analysis_pilot_v2` | expanded pilot |
+| `robotwin/batch_analysis_round2` | round 2 |
+| `robotwin/batch_analysis_clean` | cleaned |
+| `robotwin/batch_analysis_combined` | combined dumps |
+| `robotwin/batch_analysis_turn_switch_extended` | turn_switch extended |
+| `robotwin/open_microwave_clean_diagnostic` | microwave debug |
+| `robotwin/open_microwave_tcp_diagnostic` | TCP/grasp debug |
+| `robotwin/param_sweep_missing_tasks` | gap fills |
+| `robotwin/video_dit_freq_analysis` | prefill frequency probe |
+| `robotwin/consolidated_table` | table scratch |
+
+### F.7 Early `robotwin_ahawam_sweep_40tasks_40eps`
+
+**Settings:** earlier attempt at broader task list (5 configs, no ah64_cpp3 in some layouts). **Formal MAIN-1 is the 20-task × 6-config sweep**; treat 40-task tree as historical/partial.
 
 ---
 
-## 6. 遗留与建议
+## G. Latency reference (ours vs paper)
 
-- ah/cpp：**现象乱、均值打平** → 先别急着分 cpp 长训；若要坚持「缺适配」假说，按 `AGENT_TRAINING.md` 做 **短 finetune + 对照评测**。
-- skip_phase：报告加速请用 **prefill calls / prefill_s/ep**；不要用 L_chunk 论证 skip 变快。
-- 未开源推理加速（TRT/CG/Flash）→ 无法复现论文 Table 3 的 24 Hz。
-- 平台入口与环境坑见 `AGENT_ONBOARDING.md` / `AGENT_TRAINING.md`。
+| Metric | Our A800 eager (measured) | Paper eager 5090D | Paper optimized |
+|---|---|---|---|
+| L_chunk | ~450–500 ms (~2 Hz) | ~415.8 ms | 41.4 ms / Flash 17.6 ms |
+| L_prefill | ~100 ms typical | ~61.2 ms | lower with compile/TRT |
+
+Numbers in MAIN tables are **our measurements**, not paper copies.
 
 ---
 
-## 7. 相关路径速查
+## H. Pointers
 
-```text
-dataset/cwr_wulan_aha/aha-wam-runs/robotwin_ahawam_sweep_20tasks_40eps/
-dataset/cwr_wulan_aha/aha-wam-runs/robotwin/video_dit_skip_phase_40eps_v2/
-dataset/cwr_wulan_aha/aha-wam-runs/robotwin/video_dit_skip_phase_40eps_v2_batch2/
-AHA-WAM-anygrasp/infra/train_mtp.sh
-AHA-WAM-anygrasp/infra/train_skip_phase.sh
-AHA-WAM-anygrasp/AGENT_ONBOARDING.md
-AHA-WAM-anygrasp/AGENT_TRAINING.md
-```
+- Agent eval onboarding: `AGENT_ONBOARDING.md`
+- Real training submit guide: `AGENT_TRAINING.md`
+- skip_phase notes: `infra/docs_skip_phase.md`
+- Entry: `infra/train_mtp.sh`, `infra/train_skip_phase.sh`
+
