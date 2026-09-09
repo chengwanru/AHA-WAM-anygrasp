@@ -1,0 +1,18 @@
+{
+  "mode": "baseline",
+  "task": "lift_pot",
+  "num_success": 1,
+  "num_episodes": 40,
+  "success_rate": 0.025,
+  "action_horizon": 64,
+  "chunks_per_video_prefill": 2,
+  "wall_time": 12254.108268171549,
+  "timing_avg": {
+    "L_chunk_ms": 462.6391152087599,
+    "L_prefill_ms": 99.01093691229248,
+    "prefill_calls_ep": 12.775,
+    "prefill_s_ep": 1.2649672469124198,
+    "skip_pct": 0.0,
+    "n_eps_timed": 40
+  }
+}

@@ -1,0 +1,346 @@
+{
+  "run": "batch1",
+  "source": "/home/ma-user/work/dataset/cwr_wulan_aha/aha-wam-runs/robotwin/video_dit_skip_phase_40eps_v2",
+  "tasks": {
+    "click_bell": {
+      "baseline": {
+        "mode": "baseline",
+        "task": "click_bell",
+        "num_success": 26,
+        "num_episodes": 40,
+        "success_rate": 0.65,
+        "action_horizon": 64,
+        "chunks_per_video_prefill": 2,
+        "wall_time": 4984.129704661667,
+        "timing_avg": {
+          "L_chunk_ms": 472.46406678669155,
+          "L_prefill_ms": 101.4334142451676,
+          "prefill_calls_ep": 6.475,
+          "prefill_s_ep": 0.6563290392979979,
+          "skip_pct": 0.0,
+          "n_eps_timed": 40
+        }
+      },
+      "skip_phase": {
+        "mode": "skip_phase",
+        "task": "click_bell",
+        "num_success": 29,
+        "num_episodes": 40,
+        "success_rate": 0.725,
+        "action_horizon": 64,
+        "chunks_per_video_prefill": 2,
+        "wall_time": 4984.36027546227,
+        "timing_avg": {
+          "L_chunk_ms": 479.46865655588243,
+          "L_prefill_ms": 101.64732542486317,
+          "prefill_calls_ep": 4.725,
+          "prefill_s_ep": 0.4824944619089365,
+          "skip_pct": 38.416666666666664,
+          "n_eps_timed": 40
+        }
+      }
+    },
+    "handover_mic": {
+      "baseline": {
+        "mode": "baseline",
+        "task": "handover_mic",
+        "num_success": 11,
+        "num_episodes": 40,
+        "success_rate": 0.275,
+        "action_horizon": 64,
+        "chunks_per_video_prefill": 2,
+        "wall_time": 13213.026958160102,
+        "timing_avg": {
+          "L_chunk_ms": 461.992145536577,
+          "L_prefill_ms": 100.1520652773867,
+          "prefill_calls_ep": 15.875,
+          "prefill_s_ep": 1.5958238791674375,
+          "skip_pct": 0.0,
+          "n_eps_timed": 40
+        }
+      },
+      "skip_phase": {
+        "mode": "skip_phase",
+        "task": "handover_mic",
+        "num_success": 8,
+        "num_episodes": 40,
+        "success_rate": 0.2,
+        "action_horizon": 64,
+        "chunks_per_video_prefill": 2,
+        "wall_time": 13934.903024367988,
+        "timing_avg": {
+          "L_chunk_ms": 468.0515231593834,
+          "L_prefill_ms": 101.1428817211792,
+          "prefill_calls_ep": 13.2,
+          "prefill_s_ep": 1.3353373929858208,
+          "skip_pct": 23.789682539682534,
+          "n_eps_timed": 40
+        }
+      }
+    },
+    "hanging_mug": {
+      "baseline": {
+        "mode": "baseline",
+        "task": "hanging_mug",
+        "num_success": 15,
+        "num_episodes": 40,
+        "success_rate": 0.375,
+        "action_horizon": 64,
+        "chunks_per_video_prefill": 2,
+        "wall_time": 17868.48024006933,
+        "timing_avg": {
+          "L_chunk_ms": 476.57276900299803,
+          "L_prefill_ms": 101.84023045431908,
+          "prefill_calls_ep": 22.175,
+          "prefill_s_ep": 2.259574754349887,
+          "skip_pct": 0.0,
+          "n_eps_timed": 40
+        }
+      },
+      "skip_phase": {
+        "mode": "skip_phase",
+        "task": "hanging_mug",
+        "num_success": 15,
+        "num_episodes": 40,
+        "success_rate": 0.375,
+        "action_horizon": 64,
+        "chunks_per_video_prefill": 2,
+        "wall_time": 19309.64075347781,
+        "timing_avg": {
+          "L_chunk_ms": 488.2480380588451,
+          "L_prefill_ms": 104.19656696114566,
+          "prefill_calls_ep": 13.0,
+          "prefill_s_ep": 1.3561561385169625,
+          "skip_pct": 46.40984015984016,
+          "n_eps_timed": 40
+        }
+      }
+    },
+    "move_stapler_pad": {
+      "baseline": {
+        "mode": "baseline",
+        "task": "move_stapler_pad",
+        "num_success": 1,
+        "num_episodes": 40,
+        "success_rate": 0.025,
+        "action_horizon": 64,
+        "chunks_per_video_prefill": 2,
+        "wall_time": 9880.337771736085,
+        "timing_avg": {
+          "L_chunk_ms": 458.68574809655547,
+          "L_prefill_ms": 99.96796272695065,
+          "prefill_calls_ep": 12.8,
+          "prefill_s_ep": 1.2797516535967588,
+          "skip_pct": 0.0,
+          "n_eps_timed": 40
+        }
+      },
+      "skip_phase": {
+        "mode": "skip_phase",
+        "task": "move_stapler_pad",
+        "num_success": 3,
+        "num_episodes": 40,
+        "success_rate": 0.075,
+        "action_horizon": 64,
+        "chunks_per_video_prefill": 2,
+        "wall_time": 9699.510843463242,
+        "timing_avg": {
+          "L_chunk_ms": 490.27898902175104,
+          "L_prefill_ms": 104.07124058512802,
+          "prefill_calls_ep": 9.55,
+          "prefill_s_ep": 0.9941927496343851,
+          "skip_pct": 26.125,
+          "n_eps_timed": 40
+        }
+      }
+    },
+    "place_bread_basket": {
+      "baseline": {
+        "mode": "baseline",
+        "task": "place_bread_basket"
+      },
+      "skip_phase": {
+        "mode": "skip_phase",
+        "task": "place_bread_basket",
+        "num_success": 23,
+        "num_episodes": 40,
+        "success_rate": 0.575,
+        "action_horizon": 64,
+        "chunks_per_video_prefill": 2,
+        "wall_time": 12613.32170765847,
+        "timing_avg": {
+          "L_chunk_ms": 453.445434306427,
+          "L_prefill_ms": 98.58443820829216,
+          "prefill_calls_ep": 9.125,
+          "prefill_s_ep": 0.9027152987197041,
+          "skip_pct": 39.57503607503607,
+          "n_eps_timed": 40
+        }
+      }
+    },
+    "place_mouse_pad": {
+      "baseline": {
+        "mode": "baseline",
+        "task": "place_mouse_pad",
+        "num_success": 19,
+        "num_episodes": 40,
+        "success_rate": 0.475,
+        "action_horizon": 64,
+        "chunks_per_video_prefill": 2,
+        "wall_time": 7386.890081182122,
+        "timing_avg": {
+          "L_chunk_ms": 461.9773405802747,
+          "L_prefill_ms": 100.18331687324321,
+          "prefill_calls_ep": 9.2,
+          "prefill_s_ep": 0.9223136084154249,
+          "skip_pct": 0.0,
+          "n_eps_timed": 40
+        }
+      },
+      "skip_phase": {
+        "mode": "skip_phase",
+        "task": "place_mouse_pad",
+        "num_success": 8,
+        "num_episodes": 40,
+        "success_rate": 0.2,
+        "action_horizon": 64,
+        "chunks_per_video_prefill": 2,
+        "wall_time": 9248.69538204372,
+        "timing_avg": {
+          "L_chunk_ms": 453.80187867107713,
+          "L_prefill_ms": 98.11738566452473,
+          "prefill_calls_ep": 9.25,
+          "prefill_s_ep": 0.9083714341744781,
+          "skip_pct": 24.249999999999996,
+          "n_eps_timed": 40
+        }
+      }
+    },
+    "place_object_basket": {
+      "baseline": {
+        "mode": "baseline",
+        "task": "place_object_basket"
+      },
+      "skip_phase": {
+        "mode": "skip_phase",
+        "task": "place_object_basket",
+        "num_success": 7,
+        "num_episodes": 40,
+        "success_rate": 0.175,
+        "action_horizon": 64,
+        "chunks_per_video_prefill": 2,
+        "wall_time": 18588.97377243638,
+        "timing_avg": {
+          "L_chunk_ms": 481.5694436315377,
+          "L_prefill_ms": 103.07763214727049,
+          "prefill_calls_ep": 10.225,
+          "prefill_s_ep": 1.0542123960331082,
+          "skip_pct": 52.00688200688198,
+          "n_eps_timed": 40
+        }
+      }
+    },
+    "put_bottles_dustbin": {
+      "baseline": {
+        "mode": "baseline",
+        "task": "put_bottles_dustbin",
+        "timing_avg": {
+          "L_chunk_ms": 443.8036173180262,
+          "L_prefill_ms": 96.22618644946674,
+          "prefill_calls_ep": 41.7027027027027,
+          "prefill_s_ep": 4.017655244550189,
+          "skip_pct": 0.0,
+          "n_eps_timed": 37
+        }
+      },
+      "skip_phase": {
+        "mode": "skip_phase",
+        "task": "put_bottles_dustbin",
+        "timing_avg": {
+          "L_chunk_ms": 458.15132384773517,
+          "L_prefill_ms": 99.36902731183196,
+          "prefill_calls_ep": 22.485714285714284,
+          "prefill_s_ep": 2.2380146013838904,
+          "skip_pct": 48.820173135869986,
+          "n_eps_timed": 35
+        }
+      }
+    },
+    "stack_blocks_three": {
+      "baseline": {
+        "mode": "baseline",
+        "task": "stack_blocks_three",
+        "num_success": 7,
+        "num_episodes": 40,
+        "success_rate": 0.175,
+        "action_horizon": 64,
+        "chunks_per_video_prefill": 2,
+        "wall_time": 26455.872070759535,
+        "timing_avg": {
+          "L_chunk_ms": 464.90176570169723,
+          "L_prefill_ms": 100.31262250044699,
+          "prefill_calls_ep": 34.05,
+          "prefill_s_ep": 3.4155604554340244,
+          "skip_pct": 0.0,
+          "n_eps_timed": 40
+        }
+      },
+      "skip_phase": {
+        "mode": "skip_phase",
+        "task": "stack_blocks_three",
+        "num_success": 4,
+        "num_episodes": 40,
+        "success_rate": 0.1,
+        "action_horizon": 64,
+        "chunks_per_video_prefill": 2,
+        "wall_time": 27687.215868383646,
+        "timing_avg": {
+          "L_chunk_ms": 447.01324250249115,
+          "L_prefill_ms": 97.53962497093549,
+          "prefill_calls_ep": 30.95,
+          "prefill_s_ep": 3.013164299726486,
+          "skip_pct": 14.433873211446747,
+          "n_eps_timed": 40
+        }
+      }
+    },
+    "stack_blocks_two": {
+      "baseline": {
+        "mode": "baseline",
+        "task": "stack_blocks_two",
+        "num_success": 23,
+        "num_episodes": 40,
+        "success_rate": 0.575,
+        "action_horizon": 64,
+        "chunks_per_video_prefill": 2,
+        "wall_time": 12914.456149846315,
+        "timing_avg": {
+          "L_chunk_ms": 463.7702188043062,
+          "L_prefill_ms": 99.92759672670991,
+          "prefill_calls_ep": 16.575,
+          "prefill_s_ep": 1.6576279148459434,
+          "skip_pct": 0.0,
+          "n_eps_timed": 40
+        }
+      },
+      "skip_phase": {
+        "mode": "skip_phase",
+        "task": "stack_blocks_two",
+        "num_success": 22,
+        "num_episodes": 40,
+        "success_rate": 0.55,
+        "action_horizon": 64,
+        "chunks_per_video_prefill": 2,
+        "wall_time": 13334.738442055881,
+        "timing_avg": {
+          "L_chunk_ms": 446.2512830520559,
+          "L_prefill_ms": 96.79142316785887,
+          "prefill_calls_ep": 14.375,
+          "prefill_s_ep": 1.3903680531308056,
+          "skip_pct": 18.751262626262623,
+          "n_eps_timed": 40
+        }
+      }
+    }
+  }
+}

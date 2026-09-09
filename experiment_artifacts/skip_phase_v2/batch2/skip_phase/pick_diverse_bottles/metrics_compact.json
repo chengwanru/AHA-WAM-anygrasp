@@ -1,0 +1,18 @@
+{
+  "mode": "skip_phase",
+  "task": "pick_diverse_bottles",
+  "num_success": 21,
+  "num_episodes": 40,
+  "success_rate": 0.525,
+  "action_horizon": 64,
+  "chunks_per_video_prefill": 2,
+  "wall_time": 7028.293062828481,
+  "timing_avg": {
+    "L_chunk_ms": 472.2182963349428,
+    "L_prefill_ms": 101.41960139467662,
+    "prefill_calls_ep": 5.625,
+    "prefill_s_ep": 0.5697298686951399,
+    "skip_pct": 41.99999999999999,
+    "n_eps_timed": 40
+  }
+}

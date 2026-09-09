@@ -1,0 +1,286 @@
+output_dir: path/to/checkpoints/robotwin/runs/train/${hydra:runtime.choices.task}-${now:%Y-%m-%d}_${now:%H-%M-%S}
+batch_size: 6
+num_workers: 32
+lr_scheduler_type: cosine
+learning_rate: 5.0e-05
+num_epochs: 5
+max_steps: null
+log_every: 10
+save_every: 2500
+eval_every: 500
+eval_num_inference_steps: 10
+gradient_accumulation_steps: 1
+mixed_precision: bf16
+seed: 42
+max_grad_norm: 1.0
+weight_decay: 0.01
+freeze_video_dit: false
+resume: null
+init_checkpoint: null
+resume_global_batch_size: null
+wandb:
+  enabled: true
+  workspace: null
+  project: ahawam
+  name: robotwin_ahawam
+  group: null
+  mode: offline
+data:
+  train:
+    _target_: ahawam.datasets.lerobot.robot_video_dataset.RobotVideoDataset
+    dataset_dirs:
+    - path/to/robotwin2.0
+    shape_meta:
+      images:
+      - key: cam_high
+        raw_shape:
+        - 3
+        - 480
+        - 640
+        shape:
+        - 3
+        - 240
+        - 320
+      - key: cam_left_wrist
+        raw_shape:
+        - 3
+        - 480
+        - 640
+        shape:
+        - 3
+        - 240
+        - 320
+      - key: cam_right_wrist
+        raw_shape:
+        - 3
+        - 480
+        - 640
+        shape:
+        - 3
+        - 240
+        - 320
+      action:
+      - key: default
+        raw_shape: 14
+        shape: 14
+      state:
+      - key: default
+        raw_shape: 14
+        shape: 14
+    num_frames: 65
+    global_sample_stride: 1
+    action_video_freq_ratio: 8
+    video_size:
+    - 384
+    - 320
+    camera_key: null
+    val_set_proportion: 0.01
+    is_training_set: true
+    pretrained_norm_stats: path/to/dataset_stats.json
+    skip_padding_as_possible: false
+    concat_multi_camera: robotwin
+    processor:
+      _target_: ahawam.datasets.lerobot.processors.ahawam_processor.AHAWAMProcessor
+      shape_meta: ${data.train.shape_meta}
+      num_obs_steps: ${data.train.num_frames}
+      num_output_cameras: 3
+      action_output_dim: 14
+      proprio_output_dim: 14
+      action_state_transforms: null
+      use_stepwise_action_norm: false
+      norm_default_mode: z-score
+      norm_exception_mode: null
+      action_state_merger:
+        _target_: ahawam.datasets.lerobot.transforms.action_state_merger.ConcatLeftAlign
+      train_transforms:
+      - _target_: ahawam.datasets.lerobot.transforms.image.ToTensor
+      - _target_: torchvision.transforms.Resize
+        size:
+        - 240
+        - 320
+      val_transforms:
+      - _target_: ahawam.datasets.lerobot.transforms.image.ToTensor
+      - _target_: torchvision.transforms.Resize
+        size:
+        - 240
+        - 320
+    text_embedding_cache_dir: path/to/text_embeds_cache/robotwin
+    video_latent_cache_dir: null
+    context_len: 128
+  val:
+    _target_: ahawam.datasets.lerobot.robot_video_dataset.RobotVideoDataset
+    dataset_dirs:
+    - path/to/robotwin2.0
+    shape_meta:
+      images:
+      - key: cam_high
+        raw_shape:
+        - 3
+        - 480
+        - 640
+        shape:
+        - 3
+        - 240
+        - 320
+      - key: cam_left_wrist
+        raw_shape:
+        - 3
+        - 480
+        - 640
+        shape:
+        - 3
+        - 240
+        - 320
+      - key: cam_right_wrist
+        raw_shape:
+        - 3
+        - 480
+        - 640
+        shape:
+        - 3
+        - 240
+        - 320
+      action:
+      - key: default
+        raw_shape: 14
+        shape: 14
+      state:
+      - key: default
+        raw_shape: 14
+        shape: 14
+    num_frames: 65
+    global_sample_stride: 1
+    action_video_freq_ratio: 8
+    video_size:
+    - 384
+    - 320
+    camera_key: null
+    val_set_proportion: 0.01
+    is_training_set: false
+    pretrained_norm_stats: path/to/dataset_stats.json
+    skip_padding_as_possible: false
+    concat_multi_camera: robotwin
+    processor:
+      _target_: ahawam.datasets.lerobot.processors.ahawam_processor.AHAWAMProcessor
+      shape_meta: ${data.train.shape_meta}
+      num_obs_steps: ${data.train.num_frames}
+      num_output_cameras: 3
+      action_output_dim: 14
+      proprio_output_dim: 14
+      action_state_transforms: null
+      use_stepwise_action_norm: false
+      norm_default_mode: z-score
+      norm_exception_mode: null
+      action_state_merger:
+        _target_: ahawam.datasets.lerobot.transforms.action_state_merger.ConcatLeftAlign
+      train_transforms:
+      - _target_: ahawam.datasets.lerobot.transforms.image.ToTensor
+      - _target_: torchvision.transforms.Resize
+        size:
+        - 240
+        - 320
+      val_transforms:
+      - _target_: ahawam.datasets.lerobot.transforms.image.ToTensor
+      - _target_: torchvision.transforms.Resize
+        size:
+        - 240
+        - 320
+    text_embedding_cache_dir: path/to/text_embeds_cache/robotwin
+    context_len: 128
+model:
+  _target_: ahawam.runtime.create_ahawam
+  model_id: Wan-AI/Wan2.2-TI2V-5B
+  tokenizer_model_id: Wan-AI/Wan2.1-T2V-1.3B
+  tokenizer_max_len: 128
+  load_text_encoder: true
+  proprio_dim: ${data.train.processor.proprio_output_dim}
+  redirect_common_files: true
+  mot_checkpoint_mixed_attn: false
+  action_dit_pretrained_path: null
+  skip_dit_load_from_pretrain: true
+  action_horizon: 64
+  action_chunk_size: 16
+  max_action_offset: 0
+  action_train_timestep_mode: per_chunk
+  action_obs_downsample_factor: 1
+  chunk_kv_editor_num_queries: 32
+  num_history_frames: 6
+  action_video_read_mode: current_only
+  video_rope_frame_stride: ${data.train.action_video_freq_ratio}
+  video_dit_config:
+    has_image_input: false
+    patch_size:
+    - 1
+    - 2
+    - 2
+    in_dim: 48
+    hidden_dim: 3072
+    ffn_dim: 14336
+    freq_dim: 256
+    text_dim: 4096
+    out_dim: 48
+    num_heads: 24
+    attn_head_dim: 128
+    num_layers: 30
+    eps: 1.0e-06
+    seperated_timestep: true
+    require_clip_embedding: false
+    require_vae_embedding: false
+    fuse_vae_embedding_in_latents: true
+    use_gradient_checkpointing: ${model.mot_checkpoint_mixed_attn}
+    video_attention_mask_mode: per_frame_causal
+    action_conditioned: false
+    action_dim: ${data.train.processor.action_output_dim}
+    action_group_causal_mask_mode: group_diagonal
+  action_dit_config:
+    action_dim: ${data.train.processor.action_output_dim}
+    hidden_dim: 1024
+    ffn_dim: 4096
+    num_heads: 24
+    attn_head_dim: 128
+    num_layers: 30
+    text_dim: 4096
+    freq_dim: 256
+    eps: 1.0e-06
+    autoregressive_teacher_forcing: true
+    action_chunk_size: ${model.action_chunk_size}
+    action_teacher_forcing_mask_mode: stage1_chunkwise
+    use_gradient_checkpointing: ${model.mot_checkpoint_mixed_attn}
+  video_scheduler:
+    train_shift: 5.0
+    infer_shift: 5.0
+    num_train_timesteps: 1000
+  action_scheduler:
+    train_shift: 5.0
+    infer_shift: 5.0
+    num_train_timesteps: 1000
+  loss:
+    lambda_action: 1.0
+    lambda_action_prior: 1.0
+history_aware_batching: true
+ckpt: /home/ma-user/work/dataset/cwr_wulan_model/aha-wam/checkpoints/AHA-WAM-RoboTwin2.0/robotwin_ahawam.pt
+gpu_id: 0
+EVALUATION:
+  robotwin_root: /home/ma-user/work/dataset/cwr_wulan_aha/AHA-WAM-anygrasp/third_party/RoboTwin
+  policy_name: ahawam_policy
+  task_name: move_can_pot
+  task_config: demo_randomized
+  instruction_type: unseen
+  eval_num_episodes: 40
+  output_dir: /opt/huawei/dataset/cwr_wulan_aha/aha-wam-runs/robotwin/video_dit_skip_phase_40eps_v2_batch2/skip_phase/move_can_pot
+  action_horizon: 64
+  chunks_per_video_prefill: 2
+  num_inference_steps: 10
+  sigma_shift: null
+  text_cfg_scale: 1.0
+  negative_prompt: ''
+  rand_device: cpu
+  tiled: false
+  timing_enabled: true
+  detailed_analysis: true
+  dataset_stats_path: null
+  device: cuda
+MULTIRUN:
+  enabled: false
+  num_gpus: 8
+  max_tasks_per_gpu: 2

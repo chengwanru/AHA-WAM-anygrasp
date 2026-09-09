@@ -1,0 +1,18 @@
+{
+  "mode": "skip_phase",
+  "task": "click_bell",
+  "num_success": 29,
+  "num_episodes": 40,
+  "success_rate": 0.725,
+  "action_horizon": 64,
+  "chunks_per_video_prefill": 2,
+  "wall_time": 4984.36027546227,
+  "timing_avg": {
+    "L_chunk_ms": 479.46865655588243,
+    "L_prefill_ms": 101.64732542486317,
+    "prefill_calls_ep": 4.725,
+    "prefill_s_ep": 0.4824944619089365,
+    "skip_pct": 38.416666666666664,
+    "n_eps_timed": 40
+  }
+}
