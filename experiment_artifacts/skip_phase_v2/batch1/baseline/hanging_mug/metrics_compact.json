@@ -1,0 +1,18 @@
+{
+  "mode": "baseline",
+  "task": "hanging_mug",
+  "num_success": 15,
+  "num_episodes": 40,
+  "success_rate": 0.375,
+  "action_horizon": 64,
+  "chunks_per_video_prefill": 2,
+  "wall_time": 17868.48024006933,
+  "timing_avg": {
+    "L_chunk_ms": 476.57276900299803,
+    "L_prefill_ms": 101.84023045431908,
+    "prefill_calls_ep": 22.175,
+    "prefill_s_ep": 2.259574754349887,
+    "skip_pct": 0.0,
+    "n_eps_timed": 40
+  }
+}

@@ -1,0 +1,481 @@
+{
+  "task_name": "hanging_mug",
+  "mode": "baseline",
+  "action_horizon": 64,
+  "chunks_per_video_prefill": 2,
+  "num_episodes": 40,
+  "num_success": 15,
+  "success_rate": 0.375,
+  "wall_time": 17868.48024006933,
+  "returncode": 0,
+  "skipped_existing": false,
+  "gpu": 7,
+  "log_file": "/opt/huawei/dataset/cwr_wulan_aha/aha-wam-runs/robotwin/video_dit_skip_phase_40eps_v2/baseline/hanging_mug/hanging_mug_baseline_gpu7.log",
+  "num_analysis_files": 40,
+  "latency_means": {
+    "infer_s": {
+      "mean": 22.97942196149379,
+      "min": 10.49205156415701,
+      "max": 30.455641873180866,
+      "n": 40
+    },
+    "sim_s": {
+      "mean": 48.466468665003774,
+      "min": 23.5993494912982,
+      "max": 76.3026786223054,
+      "n": 40
+    },
+    "prefill_s": {
+      "mean": 2.259574754349887,
+      "min": 1.0031490474939346,
+      "max": 2.9940471202135086,
+      "n": 40
+    },
+    "action_chunk_s": {
+      "mean": 20.717376559227706,
+      "min": 9.480465322732925,
+      "max": 27.477602250874043,
+      "n": 40
+    },
+    "infer_per_action_s": {
+      "mean": 0.03359360225728683,
+      "min": 0.03305278939505418,
+      "max": 0.03482904702701805,
+      "n": 40
+    },
+    "infer_s_per_call": {
+      "mean": 0.5287043121146566,
+      "min": 0.5218861483429608,
+      "max": 0.5357039137965157,
+      "n": 40
+    },
+    "prefill_s_per_call": {
+      "mean": 0.10184023045431909,
+      "min": 0.10024501857432452,
+      "max": 0.10361177135597575,
+      "n": 40
+    },
+    "action_chunk_s_per_call": {
+      "mean": 0.47657276900299833,
+      "min": 0.4706418303805485,
+      "max": 0.48206319738375514,
+      "n": 40
+    },
+    "action_hz_policy_only": {
+      "mean": 29.771888571345336,
+      "min": 28.71166699520279,
+      "max": 30.254632613537723,
+      "n": 40
+    },
+    "action_hz_infer_plus_sim": {
+      "mean": 9.505891804051478,
+      "min": 8.02689336680071,
+      "max": 11.351694736325504,
+      "n": 40
+    },
+    "chunk_hz": {
+      "mean": 1.8914784567115686,
+      "min": 1.8667028077376426,
+      "max": 1.9161267321907225,
+      "n": 40
+    },
+    "skipped_prefills": {
+      "mean": 0.0,
+      "min": 0.0,
+      "max": 0.0,
+      "n": 40
+    },
+    "prefill_decisions": {
+      "mean": 21.175,
+      "min": 9.0,
+      "max": 28.0,
+      "n": 40
+    },
+    "skipped_prefill_ratio": {
+      "mean": 0.0,
+      "min": 0.0,
+      "max": 0.0,
+      "n": 40
+    },
+    "infer_calls": {
+      "mean": 43.475,
+      "min": 20.0,
+      "max": 57.0,
+      "n": 40
+    },
+    "prefill_calls": {
+      "mean": 22.175,
+      "min": 10.0,
+      "max": 29.0,
+      "n": 40
+    }
+  },
+  "skip_phase_aggregate": {
+    "phase_step_counts": {},
+    "skip_decisions": 0,
+    "skip_true": 0,
+    "skip_ratio": null
+  },
+  "episodes_brief": [
+    {
+      "episode_idx": 0,
+      "seed": 4300000,
+      "success": false,
+      "num_steps": 900,
+      "infer_per_action_s": 0.033339432320661014,
+      "skipped_prefill_ratio": 0.0,
+      "video_dit_mode": "baseline"
+    },
+    {
+      "episode_idx": 10,
+      "seed": 4300011,
+      "success": false,
+      "num_steps": 900,
+      "infer_per_action_s": 0.033293864809804494,
+      "skipped_prefill_ratio": 0.0,
+      "video_dit_mode": "baseline"
+    },
+    {
+      "episode_idx": 11,
+      "seed": 4300012,
+      "success": false,
+      "num_steps": 900,
+      "infer_per_action_s": 0.03355204431547059,
+      "skipped_prefill_ratio": 0.0,
+      "video_dit_mode": "baseline"
+    },
+    {
+      "episode_idx": 12,
+      "seed": 4300014,
+      "success": false,
+      "num_steps": 900,
+      "infer_per_action_s": 0.03305278939505418,
+      "skipped_prefill_ratio": 0.0,
+      "video_dit_mode": "baseline"
+    },
+    {
+      "episode_idx": 13,
+      "seed": 4300015,
+      "success": false,
+      "num_steps": 900,
+      "infer_per_action_s": 0.03327332274781333,
+      "skipped_prefill_ratio": 0.0,
+      "video_dit_mode": "baseline"
+    },
+    {
+      "episode_idx": 14,
+      "seed": 4300016,
+      "success": true,
+      "num_steps": 321,
+      "infer_per_action_s": 0.034460711609165987,
+      "skipped_prefill_ratio": 0.0,
+      "video_dit_mode": "baseline"
+    },
+    {
+      "episode_idx": 15,
+      "seed": 4300017,
+      "success": true,
+      "num_steps": 323,
+      "infer_per_action_s": 0.03482904702701805,
+      "skipped_prefill_ratio": 0.0,
+      "video_dit_mode": "baseline"
+    },
+    {
+      "episode_idx": 16,
+      "seed": 4300018,
+      "success": true,
+      "num_steps": 329,
+      "infer_per_action_s": 0.0334956973881707,
+      "skipped_prefill_ratio": 0.0,
+      "video_dit_mode": "baseline"
+    },
+    {
+      "episode_idx": 17,
+      "seed": 4300019,
+      "success": true,
+      "num_steps": 389,
+      "infer_per_action_s": 0.0341348108335142,
+      "skipped_prefill_ratio": 0.0,
+      "video_dit_mode": "baseline"
+    },
+    {
+      "episode_idx": 18,
+      "seed": 4300020,
+      "success": false,
+      "num_steps": 900,
+      "infer_per_action_s": 0.033671804351939096,
+      "skipped_prefill_ratio": 0.0,
+      "video_dit_mode": "baseline"
+    },
+    {
+      "episode_idx": 19,
+      "seed": 4300021,
+      "success": false,
+      "num_steps": 900,
+      "infer_per_action_s": 0.03327919863164425,
+      "skipped_prefill_ratio": 0.0,
+      "video_dit_mode": "baseline"
+    },
+    {
+      "episode_idx": 1,
+      "seed": 4300001,
+      "success": true,
+      "num_steps": 317,
+      "infer_per_action_s": 0.03321776745917293,
+      "skipped_prefill_ratio": 0.0,
+      "video_dit_mode": "baseline"
+    },
+    {
+      "episode_idx": 20,
+      "seed": 4300022,
+      "success": true,
+      "num_steps": 332,
+      "infer_per_action_s": 0.03361498095454222,
+      "skipped_prefill_ratio": 0.0,
+      "video_dit_mode": "baseline"
+    },
+    {
+      "episode_idx": 21,
+      "seed": 4300023,
+      "success": false,
+      "num_steps": 900,
+      "infer_per_action_s": 0.03349783567090829,
+      "skipped_prefill_ratio": 0.0,
+      "video_dit_mode": "baseline"
+    },
+    {
+      "episode_idx": 22,
+      "seed": 4300024,
+      "success": false,
+      "num_steps": 900,
+      "infer_per_action_s": 0.033551471216811075,
+      "skipped_prefill_ratio": 0.0,
+      "video_dit_mode": "baseline"
+    },
+    {
+      "episode_idx": 23,
+      "seed": 4300025,
+      "success": false,
+      "num_steps": 900,
+      "infer_per_action_s": 0.03383960208131207,
+      "skipped_prefill_ratio": 0.0,
+      "video_dit_mode": "baseline"
+    },
+    {
+      "episode_idx": 24,
+      "seed": 4300026,
+      "success": false,
+      "num_steps": 900,
+      "infer_per_action_s": 0.03361678605278333,
+      "skipped_prefill_ratio": 0.0,
+      "video_dit_mode": "baseline"
+    },
+    {
+      "episode_idx": 25,
+      "seed": 4300028,
+      "success": true,
+      "num_steps": 322,
+      "infer_per_action_s": 0.03442181517248568,
+      "skipped_prefill_ratio": 0.0,
+      "video_dit_mode": "baseline"
+    },
+    {
+      "episode_idx": 26,
+      "seed": 4300029,
+      "success": false,
+      "num_steps": 900,
+      "infer_per_action_s": 0.033488669966657954,
+      "skipped_prefill_ratio": 0.0,
+      "video_dit_mode": "baseline"
+    },
+    {
+      "episode_idx": 27,
+      "seed": 4300030,
+      "success": true,
+      "num_steps": 324,
+      "infer_per_action_s": 0.03432573207918509,
+      "skipped_prefill_ratio": 0.0,
+      "video_dit_mode": "baseline"
+    },
+    {
+      "episode_idx": 28,
+      "seed": 4300031,
+      "success": false,
+      "num_steps": 900,
+      "infer_per_action_s": 0.03343757986194558,
+      "skipped_prefill_ratio": 0.0,
+      "video_dit_mode": "baseline"
+    },
+    {
+      "episode_idx": 29,
+      "seed": 4300033,
+      "success": false,
+      "num_steps": 900,
+      "infer_per_action_s": 0.033509603035118844,
+      "skipped_prefill_ratio": 0.0,
+      "video_dit_mode": "baseline"
+    },
+    {
+      "episode_idx": 2,
+      "seed": 4300002,
+      "success": true,
+      "num_steps": 317,
+      "infer_per_action_s": 0.03309795446106312,
+      "skipped_prefill_ratio": 0.0,
+      "video_dit_mode": "baseline"
+    },
+    {
+      "episode_idx": 30,
+      "seed": 4300034,
+      "success": true,
+      "num_steps": 323,
+      "infer_per_action_s": 0.03451186563854247,
+      "skipped_prefill_ratio": 0.0,
+      "video_dit_mode": "baseline"
+    },
+    {
+      "episode_idx": 31,
+      "seed": 4300035,
+      "success": false,
+      "num_steps": 900,
+      "infer_per_action_s": 0.033424675605363316,
+      "skipped_prefill_ratio": 0.0,
+      "video_dit_mode": "baseline"
+    },
+    {
+      "episode_idx": 32,
+      "seed": 4300036,
+      "success": false,
+      "num_steps": 900,
+      "infer_per_action_s": 0.033267600627409084,
+      "skipped_prefill_ratio": 0.0,
+      "video_dit_mode": "baseline"
+    },
+    {
+      "episode_idx": 33,
+      "seed": 4300038,
+      "success": false,
+      "num_steps": 900,
+      "infer_per_action_s": 0.0331253005646997,
+      "skipped_prefill_ratio": 0.0,
+      "video_dit_mode": "baseline"
+    },
+    {
+      "episode_idx": 34,
+      "seed": 4300040,
+      "success": true,
+      "num_steps": 320,
+      "infer_per_action_s": 0.03327303130645305,
+      "skipped_prefill_ratio": 0.0,
+      "video_dit_mode": "baseline"
+    },
+    {
+      "episode_idx": 35,
+      "seed": 4300041,
+      "success": true,
+      "num_steps": 332,
+      "infer_per_action_s": 0.03371617911630366,
+      "skipped_prefill_ratio": 0.0,
+      "video_dit_mode": "baseline"
+    },
+    {
+      "episode_idx": 36,
+      "seed": 4300042,
+      "success": false,
+      "num_steps": 900,
+      "infer_per_action_s": 0.03360992348856396,
+      "skipped_prefill_ratio": 0.0,
+      "video_dit_mode": "baseline"
+    },
+    {
+      "episode_idx": 37,
+      "seed": 4300043,
+      "success": false,
+      "num_steps": 900,
+      "infer_per_action_s": 0.03380302590628465,
+      "skipped_prefill_ratio": 0.0,
+      "video_dit_mode": "baseline"
+    },
+    {
+      "episode_idx": 38,
+      "seed": 4300044,
+      "success": false,
+      "num_steps": 900,
+      "infer_per_action_s": 0.0334890147133006,
+      "skipped_prefill_ratio": 0.0,
+      "video_dit_mode": "baseline"
+    },
+    {
+      "episode_idx": 39,
+      "seed": 4300045,
+      "success": false,
+      "num_steps": 900,
+      "infer_per_action_s": 0.033558581007851494,
+      "skipped_prefill_ratio": 0.0,
+      "video_dit_mode": "baseline"
+    },
+    {
+      "episode_idx": 3,
+      "seed": 4300003,
+      "success": false,
+      "num_steps": 900,
+      "infer_per_action_s": 0.03346881440944142,
+      "skipped_prefill_ratio": 0.0,
+      "video_dit_mode": "baseline"
+    },
+    {
+      "episode_idx": 4,
+      "seed": 4300004,
+      "success": false,
+      "num_steps": 900,
+      "infer_per_action_s": 0.033480499643418524,
+      "skipped_prefill_ratio": 0.0,
+      "video_dit_mode": "baseline"
+    },
+    {
+      "episode_idx": 5,
+      "seed": 4300005,
+      "success": true,
+      "num_steps": 334,
+      "infer_per_action_s": 0.03321029500154678,
+      "skipped_prefill_ratio": 0.0,
+      "video_dit_mode": "baseline"
+    },
+    {
+      "episode_idx": 6,
+      "seed": 4300007,
+      "success": false,
+      "num_steps": 900,
+      "infer_per_action_s": 0.0336424058675766,
+      "skipped_prefill_ratio": 0.0,
+      "video_dit_mode": "baseline"
+    },
+    {
+      "episode_idx": 7,
+      "seed": 4300008,
+      "success": true,
+      "num_steps": 314,
+      "infer_per_action_s": 0.03346675769633548,
+      "skipped_prefill_ratio": 0.0,
+      "video_dit_mode": "baseline"
+    },
+    {
+      "episode_idx": 8,
+      "seed": 4300009,
+      "success": true,
+      "num_steps": 318,
+      "infer_per_action_s": 0.03330053581194308,
+      "skipped_prefill_ratio": 0.0,
+      "video_dit_mode": "baseline"
+    },
+    {
+      "episode_idx": 9,
+      "seed": 4300010,
+      "success": false,
+      "num_steps": 900,
+      "infer_per_action_s": 0.033393062444196805,
+      "skipped_prefill_ratio": 0.0,
+      "video_dit_mode": "baseline"
+    }
+  ]
+}

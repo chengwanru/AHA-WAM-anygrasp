@@ -1,0 +1,18 @@
+{
+  "mode": "baseline",
+  "task": "handover_mic",
+  "num_success": 11,
+  "num_episodes": 40,
+  "success_rate": 0.275,
+  "action_horizon": 64,
+  "chunks_per_video_prefill": 2,
+  "wall_time": 13213.026958160102,
+  "timing_avg": {
+    "L_chunk_ms": 461.992145536577,
+    "L_prefill_ms": 100.1520652773867,
+    "prefill_calls_ep": 15.875,
+    "prefill_s_ep": 1.5958238791674375,
+    "skip_pct": 0.0,
+    "n_eps_timed": 40
+  }
+}

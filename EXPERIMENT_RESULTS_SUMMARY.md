@@ -473,3 +473,8 @@ Numbers in MAIN tables are **our measurements**, not paper copies.
 - skip_phase notes: `infra/docs_skip_phase.md`
 - Entry: `infra/train_mtp.sh`, `infra/train_skip_phase.sh`
 
+
+## I. Pushed slim artifacts
+
+- skip_phase v2 baseline+skip metrics (no videos): [`experiment_artifacts/skip_phase_v2/`](./experiment_artifacts/skip_phase_v2/)
+- Full raw (~2.8G with mp4) stays on dataset disk under `aha-wam-runs/robotwin/video_dit_skip_phase_40eps_v2*`.

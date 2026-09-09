@@ -1,0 +1,12 @@
+{
+  "mode": "baseline",
+  "task": "put_bottles_dustbin",
+  "timing_avg": {
+    "L_chunk_ms": 443.8036173180262,
+    "L_prefill_ms": 96.22618644946674,
+    "prefill_calls_ep": 41.7027027027027,
+    "prefill_s_ep": 4.017655244550189,
+    "skip_pct": 0.0,
+    "n_eps_timed": 37
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "batch1": {
+    "source": "/home/ma-user/work/dataset/cwr_wulan_aha/aha-wam-runs/robotwin/video_dit_skip_phase_40eps_v2",
+    "n_tasks": 10
+  },
+  "batch2": {
+    "source": "/home/ma-user/work/dataset/cwr_wulan_aha/aha-wam-runs/robotwin/video_dit_skip_phase_40eps_v2_batch2",
+    "n_tasks": 10
+  }
+}
