@@ -470,8 +470,9 @@ Numbers in MAIN tables are **our measurements**, not paper copies.
 
 - Agent eval onboarding: `AGENT_ONBOARDING.md`
 - Real training submit guide: `AGENT_TRAINING.md`
+- Cluster eval pitfalls (modeset / lavapipe / SIGSEGV / fake 0/N, 2026-09): `infra/docs_eval_cluster_pitfalls.md`
 - skip_phase notes: `infra/docs_skip_phase.md`
-- Entry: `infra/train_mtp.sh`, `infra/train_skip_phase.sh`
+- Entry: `infra/train_mtp.sh`, `infra/train_skip_phase.sh`, `infra/train_eval_skip_v2_ft.sh`, `infra/train_eval_random_skip.sh`
 
 
 ## I. Pushed slim artifacts

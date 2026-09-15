@@ -2,10 +2,11 @@
 
 > 本文档记录 AHA-WAM-anygrasp 在 RoboTwin 2.0 上做评测/调参 sweep 的完整工作方式:
 > 目录约定、环境搭建、模型资产、任务提交流程、以及我们踩过的所有坑。
-> 最后更新:2026-09-07
+> 最后更新:2026-09-09
 >
 > **真正训练 / 短 finetune / 平台训练入口怎么写** → 见 [`AGENT_TRAINING.md`](./AGENT_TRAINING.md)。  
-> **全部实验结果总结（ah/cpp + skip_phase 主表）** → 见 [`EXPERIMENT_RESULTS_SUMMARY.md`](./EXPERIMENT_RESULTS_SUMMARY.md)。
+> **全部实验结果总结（ah/cpp + skip_phase 主表）** → 见 [`EXPERIMENT_RESULTS_SUMMARY.md`](./EXPERIMENT_RESULTS_SUMMARY.md)。  
+> **2026-09 集群评测连续翻车（modeset / lavapipe / SIGSEGV / 假 0/N）** → 见 [`infra/docs_eval_cluster_pitfalls.md`](./infra/docs_eval_cluster_pitfalls.md)。
 
 ---
 
@@ -134,7 +135,7 @@ python experiments/robotwin/eval_robotwin_single.py \
 2. **在集群上 pip install 全量 requirements.txt**。NGC 源每个包都超时,装了几个小时。正解:离线 wheels 目录 `--no-index --find-links`,或只装缺失的包,并强制可用镜像 + `PIP_EXTRA_INDEX_URL=""`。
 3. **sapien `ImportError: libX11.so.6`**。wheel 装好了但容器缺 X11 系统库。用 `ldd pysapien*.so` 定位缺失项,收集 .so 挂 `LD_LIBRARY_PATH`。**这是集群上最后一个 blocker,之前所有"环境装好了"的判断都是错的**。
 4. **Python 版本错配**。系统默认 python3.9,sapien 只有 cp310 wheel。认准 Python 3.10 环境,别在 3.9 上浪费一小时。
-5. **容器无 graphics 能力**导致 `VK_ERROR_INCOMPATIBLE_DRIVER`:`NVIDIA_DRIVER_CAPABILITIES=compute,utility` 不够,要加 `graphics`(自动带 /dev/nvidia-modeset)。container 重启不够,通常要重建。
+5. **容器无 graphics 能力**导致 `VK_ERROR_INCOMPATIBLE_DRIVER`:`NVIDIA_DRIVER_CAPABILITIES=compute,utility` 不够,要加 `graphics`(自动带 /dev/nvidia-modeset)。container 重启不够,通常要重建。**2026-09 补充**：乌兰 ModelArts 训练任务常只有 `compute,utility`（或带 `video`）,**没有** `/dev/nvidia-modeset`;入口里再 export `graphics` **补不回设备**;`mknod` 后 RDWR 仍失败。modeset **不能下载**。无 modeset 时只能 lavapipe 硬扛(关 RT+关 shadow,很慢),详见 [`infra/docs_eval_cluster_pitfalls.md`](./infra/docs_eval_cluster_pitfalls.md)。
 6. **多卡并发 symlink 竞态**:8 卡同时 `ln -sfn` 会互踩。启动前由单进程先建好。
 7. **ffmpeg 不在 PATH**:RoboTwin 调裸 `ffmpeg`,imageio-ffmpeg 的名字对不上,评测写视频时炸。
 8. **gitignore 打错字**(`ahawam-runs/` vs `aha-wam-runs/`),结果垃圾文件被 stage。改完 .gitignore 用 `git check-ignore <路径>` 验证。
@@ -143,6 +144,11 @@ python experiments/robotwin/eval_robotwin_single.py \
 11. **episode 1 混入 timing 均值**。warmup episode 比其他慢好几倍,算均值必须剔除。
 12. **磁盘写满共享盘**。600T 盘 100% 时是大家一起满;跑 40eps×20task 前先 `df -h`。
 13. **以为要迁移 28G 权重**。全是公开资产,新环境重新下载即可;唯一"不可再生"的误判是 released ckpt——它也是官方公开的。真正的教训:**先确认每个文件的来源,再决定迁移策略**。
+14. **`test_render` 失败却 exit 0** → sweep 记成假 `0/40`。渲染失败必须非零退出;sweep 不要信任空 result 文件。
+15. **缺 `task_config/demo_randomized.yml`**:vendored RoboTwin 曾整目录缺失;入口要预检。
+16. **lavapipe 上 RoboTwin 默认 RT + shadow → SIGSEGV(-11)**,表现为加载权重后 ~270s `0/N`。必须关 ray tracing 与 shadow;只关 RT 不够。看子日志最后一条 `[setup_scene]`/`[init_task]` 定位。
+17. **以日志 `revision:` 为准判断算法包是否同步**;目录名/口头「已更新」不可靠。旧 revision + 旧输出目录(`..._v4`)上的假结果不要当正式数。
+18. **只关评测视频救不了 lavapipe 吞吐**:策略相机 RGB 仍要每步渲染;关视频只省 ffmpeg/写盘。
 
 ## 6. 老平台遗留物(仅供考古,不要依赖)
 

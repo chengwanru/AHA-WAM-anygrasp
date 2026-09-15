@@ -810,17 +810,32 @@ class Wan22Trainer:
                 )
 
         optional_tensors = {}
-        for key in ("action_offset", "chunk_obs_images", "chunk_obs_images_no_offset"):
+        for key in (
+            "action_offset",
+            "chunk_obs_images",
+            "chunk_obs_images_no_offset",
+            "skip_phase_v2",
+            "skip_phase_v2_skip_ratio",
+        ):
             if key not in sample or sample[key] is None:
                 continue
             value = sample[key]
-            if key == "action_offset":
+            if key in ("action_offset", "skip_phase_v2"):
                 value = torch.as_tensor(value, dtype=torch.long)
                 if value.ndim == 0:
                     value = value.unsqueeze(0)
                 if value.ndim != 1 or int(value.shape[0]) != int(video.shape[0]):
                     raise ValueError(
-                        "`action_offset` must be scalar or [B], "
+                        f"`{key}` must be scalar or [B], "
+                        f"got shape {tuple(value.shape)} for batch={video.shape[0]}."
+                    )
+            elif key == "skip_phase_v2_skip_ratio":
+                value = torch.as_tensor(value, dtype=torch.float32)
+                if value.ndim == 0:
+                    value = value.unsqueeze(0)
+                if value.ndim != 1 or int(value.shape[0]) != int(video.shape[0]):
+                    raise ValueError(
+                        f"`{key}` must be scalar or [B], "
                         f"got shape {tuple(value.shape)} for batch={video.shape[0]}."
                     )
             else:

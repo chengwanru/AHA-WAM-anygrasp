@@ -20,6 +20,7 @@ NUM_MACHINES="${NNODES:-1}"
 MACHINE_RANK="${NODE_RANK:-0}"
 MAIN_PROCESS_IP="${MASTER_ADDR:-127.0.0.1}"
 MAIN_PROCESS_PORT="${MASTER_PORT:-29500}"
+DEEPSPEED_HOSTFILE="${DEEPSPEED_HOSTFILE:-${DS_HOSTFILE:-${HOSTFILE:-}}}"
 
 DEFAULT_TASK="robotwin_ahawam"
 DEFAULT_MODEL="ahawam"
@@ -27,9 +28,39 @@ is_integer() {
   [[ "${1}" =~ ^[0-9]+$ ]]
 }
 
-if ! is_integer "${NUM_MACHINES}" || ! is_integer "${MACHINE_RANK}"; then
-  echo "Error: NUM_MACHINES (${NUM_MACHINES}) and MACHINE_RANK (${MACHINE_RANK}) must be integers." >&2
+if ! is_integer "${NPROC_PER_NODE}" || ! is_integer "${NUM_MACHINES}" || ! is_integer "${MACHINE_RANK}"; then
+  echo "Error: NPROC_PER_NODE (${NPROC_PER_NODE}), NUM_MACHINES (${NUM_MACHINES}) and MACHINE_RANK (${MACHINE_RANK}) must be integers." >&2
   exit 1
+fi
+
+if (( NUM_MACHINES < 1 )); then
+  echo "Error: NNODES/NUM_MACHINES must be >= 1, got ${NUM_MACHINES}." >&2
+  exit 1
+fi
+
+if (( MACHINE_RANK < 0 || MACHINE_RANK >= NUM_MACHINES )); then
+  echo "Error: NODE_RANK/MACHINE_RANK must be in [0, $((NUM_MACHINES - 1))], got ${MACHINE_RANK}." >&2
+  exit 1
+fi
+
+# Multi-node DeepSpeed MUST have a hostfile; otherwise DS falls back to local-only
+# (master_addr=127.0.0.1, 8 GPUs) while we think we launched 16 — silent under-utilization.
+if (( NUM_MACHINES > 1 )) && [[ -z "${DEEPSPEED_HOSTFILE}" ]]; then
+  echo "ERROR: multi-node ZeRO2 requires DEEPSPEED_HOSTFILE (or DS_HOSTFILE/HOSTFILE)." >&2
+  echo "Generate from VC_WORKER_HOSTS, e.g.:" >&2
+  echo "  host slots=${NPROC_PER_NODE}" >&2
+  exit 1
+fi
+
+ACCELERATE_ARGS=()
+if [[ -n "${DEEPSPEED_HOSTFILE}" ]]; then
+  if [[ ! -f "${DEEPSPEED_HOSTFILE}" ]]; then
+    echo "ERROR: DEEPSPEED_HOSTFILE missing: ${DEEPSPEED_HOSTFILE}" >&2
+    exit 1
+  fi
+  echo "[hostfile] ${DEEPSPEED_HOSTFILE}:"
+  cat "${DEEPSPEED_HOSTFILE}" || true
+  ACCELERATE_ARGS+=(--deepspeed_hostfile "${DEEPSPEED_HOSTFILE}")
 fi
 
 extract_task_basename() {
@@ -155,13 +186,19 @@ PY
   fi
 fi
 
-echo "[launch] nproc_per_node=${NPROC_PER_NODE} num_machines=${NUM_MACHINES} machine_rank=${MACHINE_RANK} task=${TASK_BASENAME} run_id=${RUN_ID}"
+TOTAL_PROCESSES=$((NPROC_PER_NODE * NUM_MACHINES))
+echo "[launch] nproc_per_node=${NPROC_PER_NODE} num_processes=${TOTAL_PROCESSES} num_machines=${NUM_MACHINES} machine_rank=${MACHINE_RANK} main_process_ip=${MAIN_PROCESS_IP} main_process_port=${MAIN_PROCESS_PORT} deepspeed_hostfile=${DEEPSPEED_HOSTFILE:-none} task=${TASK_BASENAME} run_id=${RUN_ID}"
 
 #   "output_dir=./runs/${TASK_BASENAME}/${RUN_ID}" \
 
 HYDRA_FULL_ERROR=1 accelerate launch \
   --config_file scripts/accelerate_configs/accelerate_zero2_ds.yaml \
-  --num_processes "${NPROC_PER_NODE}" \
+  --num_processes "${TOTAL_PROCESSES}" \
+  --num_machines "${NUM_MACHINES}" \
+  --machine_rank "${MACHINE_RANK}" \
+  --main_process_ip "${MAIN_PROCESS_IP}" \
+  --main_process_port "${MAIN_PROCESS_PORT}" \
+  "${ACCELERATE_ARGS[@]}" \
   scripts/train.py \
   "wandb.name=${TASK_BASENAME}" \
   "${EXTRA_ARGS[@]}"

@@ -586,6 +586,34 @@ class AHAWAM(AHAWAMChunkBase):
     def _has_action_offset(self, sample: dict[str, Any]) -> bool:
         return "action_offset" in sample
 
+    def _has_skip_phase_v2(self, sample: dict[str, Any]) -> bool:
+        """SKIP_V2 experiment flag (mutually exclusive with action_offset)."""
+        if "skip_phase_v2" not in sample or sample["skip_phase_v2"] is None:
+            return False
+        if self._has_action_offset(sample):
+            raise ValueError(
+                "Sample has both `action_offset` (OFFSET experiment) and "
+                "`skip_phase_v2` (SKIP_V2 experiment); refuse to mix."
+            )
+        if self._has_cpp1_ditkv(sample):
+            raise ValueError(
+                "Sample has both `skip_phase_v2` and `cpp1_ditkv`; refuse to mix."
+            )
+        return True
+
+    def _has_cpp1_ditkv(self, sample: dict[str, Any]) -> bool:
+        """CPP1 adapt: Mot Video DiT+KV path with per-chunk always-refresh obs."""
+        if "cpp1_ditkv" not in sample or sample["cpp1_ditkv"] is None:
+            return False
+        if self._has_action_offset(sample):
+            raise ValueError(
+                "Sample has both `action_offset` (OFFSET) and `cpp1_ditkv`; refuse to mix."
+            )
+        return True
+
+    def _has_chunk_aligned_obs_override(self, sample: dict[str, Any]) -> bool:
+        return self._has_skip_phase_v2(sample) or self._has_cpp1_ditkv(sample)
+
     def _normalize_action_offsets(
         self,
         sample: dict[str, Any],
@@ -722,6 +750,25 @@ class AHAWAM(AHAWAMChunkBase):
         inputs = self.build_inputs(sample, tiled=tiled)
         if self._has_action_offset(sample):
             return self._training_loss_action_offset(sample, inputs=inputs, tiled=tiled)
+        # SKIP_V2 / CPP1_DITKV: keep action/video time-aligned; override OVCR obs
+        # with scheduled stills. Mot still runs Video DiT + chunk-updated KV.
+        if self._has_chunk_aligned_obs_override(sample):
+            action_horizon = int(getattr(self, "action_horizon", 0))
+            if action_horizon <= 0:
+                action_horizon = int(inputs["action"].shape[1])
+            batch_size = int(inputs["input_latents"].shape[0])
+            zero_offsets = torch.zeros(
+                batch_size, dtype=torch.long, device=self.device
+            )
+            obs_context, obs_context_mask = self._build_offset_obs_context(
+                sample,
+                offsets=zero_offsets,
+                action_horizon=action_horizon,
+                tiled=tiled,
+            )
+            inputs = dict(inputs)
+            inputs["obs_context"] = obs_context
+            inputs["obs_context_mask"] = obs_context_mask
         input_latents = inputs["input_latents"]
         batch_size = int(input_latents.shape[0])
         action = inputs["action"]

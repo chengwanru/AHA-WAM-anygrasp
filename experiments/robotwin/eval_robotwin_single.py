@@ -325,12 +325,11 @@ def main(cfg: DictConfig):
         except Exception:
             pass
 
-    # Headless rendering setup. The container lacks host NVIDIA GL/EGL
-    # libraries, so we use the extracted 535.183.01 driver user-space libs
-    # together with the Vulkan loader/ICD files shipped by sapien.
+    # Headless rendering setup.
+    # Prefer parent-provided ICD when valid; if modeset is unusable / AHAWAM_VULKAN_MODE=lavapipe,
+    # force software lavapipe (nvidia GLX files may exist but still cannot render).
     conda_prefix = Path(sys.executable).parent.parent
     conda_lib = conda_prefix / "lib"
-    # Prefer the installed sapien package location (works with --user installs).
     try:
         import sapien as _sapien_pkg
 
@@ -346,39 +345,187 @@ def main(cfg: DictConfig):
         "/home/ma-user/work/dataset/cwr_dataset_wulann/sapien-runtime-libs",
         base=PROJECT_ROOT,
     )
+    vulkan_icd_dir = _resolve_path_with_fallbacks(
+        "/home/ma-user/work/dataset/cwr_dataset_wulann/vulkan-icd",
+        base=PROJECT_ROOT,
+    )
     sapien_vulkan_lib = sapien_vulkan_dir / "libvulkan.so.1.3.224"
-    sapien_nvidia_icd = sapien_vulkan_dir / "nvidia_icd.json"
-    sapien_nvidia_egl = sapien_vulkan_dir / "10_nvidia.json"
-    lavapipe_icd = conda_prefix / "share" / "vulkan" / "icd.d" / "lvp_icd.x86_64.json"
+    lavapipe_icd_candidates = [
+        vulkan_icd_dir / "lvp_icd_runtime.json",
+        vulkan_icd_dir / "lvp_icd.x86_64.json",
+        Path("/usr/share/vulkan/icd.d/lvp_icd.x86_64.json"),
+        Path("/usr/share/vulkan/icd.d/lvp_icd.json"),
+        conda_prefix / "share" / "vulkan" / "icd.d" / "lvp_icd.x86_64.json",
+    ]
+    lavapipe_so_candidates = [
+        vulkan_icd_dir / "libvulkan_lvp.so",
+        Path("/usr/lib/x86_64-linux-gnu/libvulkan_lvp.so"),
+    ]
 
-    if (
-        sapien_vulkan_lib.exists()
-        and sapien_nvidia_icd.exists()
-        and (nvidia_driver_dir / "libGLX_nvidia.so.0").exists()
+    env["NVIDIA_DRIVER_CAPABILITIES"] = env.get(
+        "NVIDIA_DRIVER_CAPABILITIES", "compute,utility,graphics,display,video"
+    )
+    env["PYOPENGL_PLATFORM"] = env.get("PYOPENGL_PLATFORM", "egl")
+
+    def _modeset_ok() -> bool:
+        p = Path("/dev/nvidia-modeset")
+        if not p.exists():
+            return False
+        try:
+            fd = os.open(str(p), os.O_RDWR)
+            os.close(fd)
+            return True
+        except OSError:
+            return False
+
+    def _force_lavapipe(reason: str) -> None:
+        lvp_so = next((p for p in lavapipe_so_candidates if p.is_file()), None)
+        icd_path = None
+        if lvp_so is not None:
+            icd_dir = Path(os.environ.get("PYTHONUSERBASE", "/tmp/ahawam_user")) / "vulkan_icd"
+            icd_dir.mkdir(parents=True, exist_ok=True)
+            icd_path = icd_dir / "lvp_icd_abs.json"
+            icd_path.write_text(
+                "{\n"
+                '  "file_format_version": "1.0.0",\n'
+                '  "ICD": {\n'
+                f'    "library_path": "{lvp_so.resolve()}",\n'
+                '    "api_version": "1.1.255"\n'
+                "  }\n"
+                "}\n",
+                encoding="utf-8",
+            )
+            env["LD_LIBRARY_PATH"] = (
+                f"{lvp_so.parent}{os.pathsep}{env.get('LD_LIBRARY_PATH', '')}"
+            )
+        else:
+            for c in lavapipe_icd_candidates:
+                if c.is_file():
+                    icd_path = c
+                    break
+        if icd_path is None:
+            raise RuntimeError(
+                f"lavapipe requested ({reason}) but no ICD/libvulkan_lvp.so found. "
+                f"Expected under {vulkan_icd_dir} or /usr/share/vulkan/icd.d/"
+            )
+        env["VK_ICD_FILENAMES"] = str(icd_path)
+        env.pop("__EGL_VENDOR_LIBRARY_FILENAMES", None)
+        if Path("/usr/lib/x86_64-linux-gnu/libvulkan.so.1").is_file():
+            env["SAPIEN_VULKAN_LIBRARY_PATH"] = "/usr/lib/x86_64-linux-gnu/libvulkan.so.1"
+        elif sapien_vulkan_lib.exists():
+            env["SAPIEN_VULKAN_LIBRARY_PATH"] = str(sapien_vulkan_lib)
+        env["AHAWAM_VULKAN_MODE"] = "lavapipe"
+        env["SAPIEN_DISABLE_RAYTRACING"] = "1"
+        env["ROBOTWIN_MPLIB_NO_SAPIEN_WORLD"] = "1"
+        # Native mplib.Planner also SIGSEGV under lavapipe; stub TOPP/grippers.
+        env["ROBOTWIN_MPLIB_STUB"] = "1"
+        print(f"Vulkan: lavapipe ({reason}) ICD={icd_path} SO={lvp_so}")
+
+    # Always put nvidia user-space driver libs first (before conda lib) unless lavapipe-only.
+    ld_parts = []
+    force_lvp = str(env.get("AHAWAM_VULKAN_MODE", "")).strip().lower() == "lavapipe"
+    modeset_ok = _modeset_ok()
+    if not force_lvp and not modeset_ok:
+        force_lvp = True
+
+    def _strip_nvidia_driver_libs(path: str) -> str:
+        """NVIDIA GLX/EGL userspace + missing modeset => SIGSEGV on complex URDF under lavapipe."""
+        keep = []
+        for part in (path or "").split(os.pathsep):
+            if not part:
+                continue
+            if "nvidia-driver-libs" in part:
+                continue
+            keep.append(part)
+        return os.pathsep.join(keep)
+
+    if not force_lvp and nvidia_driver_dir.is_dir():
+        ld_parts.append(str(nvidia_driver_dir))
+    if sapien_libs_dir.is_dir():
+        ld_parts.append(str(sapien_libs_dir))
+    if conda_lib.is_dir() and any(
+        tok in str(conda_prefix) for tok in ("/envs/", "miniconda", "anaconda", "conda")
     ):
-        env["SAPIEN_VULKAN_LIBRARY_PATH"] = str(sapien_vulkan_lib)
-        env["VK_ICD_FILENAMES"] = str(sapien_nvidia_icd)
-        env["__EGL_VENDOR_LIBRARY_FILENAMES"] = str(sapien_nvidia_egl)
-        ld_parts = [str(nvidia_driver_dir)]
-        if sapien_libs_dir.is_dir():
-            ld_parts.append(str(sapien_libs_dir))
-        if conda_lib.is_dir() and any(
-            tok in str(conda_prefix) for tok in ("/envs/", "miniconda", "anaconda", "conda")
-        ):
-            ld_parts.append(str(conda_lib))
-        if env.get("LD_LIBRARY_PATH"):
-            ld_parts.append(env["LD_LIBRARY_PATH"])
-        env["LD_LIBRARY_PATH"] = os.pathsep.join(ld_parts)
-    else:
-        # Fallback: software Vulkan (lavapipe) without ray tracing.
-        env["SAPIEN_VULKAN_LIBRARY_PATH"] = str(
-            sapien_vulkan_lib if sapien_vulkan_lib.exists() else conda_lib / "libvulkan.so.1"
+        ld_parts.append(str(conda_lib))
+    if env.get("LD_LIBRARY_PATH"):
+        inherited = env["LD_LIBRARY_PATH"]
+        if force_lvp:
+            inherited = _strip_nvidia_driver_libs(inherited)
+        ld_parts.append(inherited)
+    if force_lvp:
+        # Mesa / system Vulkan first
+        sys_lib = "/usr/lib/x86_64-linux-gnu"
+        ld_parts = [sys_lib] + [p for p in ld_parts if p != sys_lib]
+    if ld_parts:
+        # de-dupe preserve order
+        seen = set()
+        ordered = []
+        for p in ld_parts:
+            for part in p.split(os.pathsep):
+                if part and part not in seen:
+                    seen.add(part)
+                    ordered.append(part)
+        env["LD_LIBRARY_PATH"] = os.pathsep.join(ordered)
+        if force_lvp:
+            print(
+                "lavapipe LD_LIBRARY_PATH: stripped nvidia-driver-libs; "
+                f"head={env['LD_LIBRARY_PATH'][:180]}..."
+            )
+
+    parent_vk = str(env.get("VK_ICD_FILENAMES", "") or "").strip()
+    glx = nvidia_driver_dir / "libGLX_nvidia.so.0"
+    egl = nvidia_driver_dir / "libEGL_nvidia.so.0"
+
+    if force_lvp:
+        _force_lavapipe(
+            "AHAWAM_VULKAN_MODE=lavapipe"
+            if str(env.get("AHAWAM_VULKAN_MODE", "")).strip().lower() == "lavapipe"
+            else "nvidia-modeset unusable"
         )
-        if lavapipe_icd.exists():
-            env["VK_ICD_FILENAMES"] = str(lavapipe_icd)
-        if sapien_nvidia_egl.exists():
-            env["__EGL_VENDOR_LIBRARY_FILENAMES"] = str(sapien_nvidia_egl)
-        env["LD_LIBRARY_PATH"] = f"{conda_lib}{os.pathsep}{env.get('LD_LIBRARY_PATH', '')}"
+    elif parent_vk and Path(parent_vk.split(":")[0]).exists():
+        # Keep parent abs ICD (from train_eval_*.sh), but if it points at nvidia while
+        # modeset is bad we already branched above.
+        if sapien_vulkan_lib.exists() and not env.get("SAPIEN_VULKAN_LIBRARY_PATH"):
+            env["SAPIEN_VULKAN_LIBRARY_PATH"] = str(sapien_vulkan_lib)
+        print(f"Vulkan: reuse parent VK_ICD_FILENAMES={parent_vk}")
+    elif glx.exists() and egl.exists() and modeset_ok:
+        icd_dir = Path(os.environ.get("PYTHONUSERBASE", "/tmp/ahawam_user")) / "vulkan_icd"
+        icd_dir.mkdir(parents=True, exist_ok=True)
+        vk_icd = icd_dir / "nvidia_icd_abs.json"
+        egl_icd = icd_dir / "10_nvidia_abs.json"
+        vk_icd.write_text(
+            "{\n"
+            '  "file_format_version": "1.0.0",\n'
+            '  "ICD": {\n'
+            f'    "library_path": "{glx}",\n'
+            '    "api_version": "1.3.242"\n'
+            "  }\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        egl_icd.write_text(
+            "{\n"
+            '  "file_format_version": "1.0.0",\n'
+            '  "ICD": {\n'
+            f'    "library_path": "{egl}"\n'
+            "  }\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        env["VK_ICD_FILENAMES"] = str(vk_icd)
+        env["__EGL_VENDOR_LIBRARY_FILENAMES"] = str(egl_icd)
+        if sapien_vulkan_lib.exists():
+            env["SAPIEN_VULKAN_LIBRARY_PATH"] = str(sapien_vulkan_lib)
+        env["AHAWAM_VULKAN_MODE"] = "nvidia"
+        print(f"Vulkan: NVIDIA abs ICD @ {vk_icd}")
+    else:
+        _force_lavapipe("fallback")
+
+    print(f"AHAWAM_VULKAN_MODE={env.get('AHAWAM_VULKAN_MODE')}")
+    print(f"VK_ICD_FILENAMES={env.get('VK_ICD_FILENAMES')}")
+    print(f"__EGL_VENDOR_LIBRARY_FILENAMES={env.get('__EGL_VENDOR_LIBRARY_FILENAMES')}")
+    print(f"SAPIEN_VULKAN_LIBRARY_PATH={env.get('SAPIEN_VULKAN_LIBRARY_PATH')}")
+    print(f"NVIDIA_DRIVER_CAPABILITIES={env.get('NVIDIA_DRIVER_CAPABILITIES')}")
 
     with open(log_file, "w", encoding="utf-8") as log_f:
         process = subprocess.Popen(
@@ -398,6 +545,14 @@ def main(cfg: DictConfig):
             log_f.flush()
         return_code = process.wait()
 
+    # RoboTwin test_render historically called exit() with code 0 on render failure.
+    log_text = log_file.read_text(encoding="utf-8", errors="replace") if log_file.exists() else ""
+    if "Render Error" in log_text or "failed to find a rendering device" in log_text:
+        raise RuntimeError(
+            f"RoboTwin render failed (Vulkan/EGL). Log: {log_file}\n"
+            "Set AHAWAM_VULKAN_MODE=lavapipe with cwr_dataset_wulann/vulkan-icd/, "
+            "or create the job with NVIDIA_DRIVER_CAPABILITIES including graphics + /dev/nvidia-modeset."
+        )
     if return_code != 0:
         raise RuntimeError(f"RoboTwin evaluation failed with return code {return_code}. Log: {log_file}")
 

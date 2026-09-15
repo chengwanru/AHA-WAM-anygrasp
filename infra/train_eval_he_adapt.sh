@@ -1,70 +1,120 @@
 #!/usr/bin/env bash
 # =============================================================================
-# EVAL MAIN-2 style: baseline + skip_phase (ah64/cpp2), RELEASED ckpt
-# Same runtime stack as train_eval_skip_v2_ft / random_skip:
-#   Python>=3.10, PyPI sapien, abs Vulkan ICD, render-fail = hard error
+# EVAL after HE adapt — ah64 / cpp=1 / always (baseline Video DiT, skip OFF)
+#   He=8  → task=robotwin_ahawam_he8  (generate+execute 8, new Video every 8)
+#   He=32 → task=robotwin_ahawam_he32 (generate+execute 32, new Video every 32)
+# 通常由 train_finetune_he_adapt.sh 训完后直接调用；也可单独交本脚本重评。
+# 16 卡：2×8，VC_TASK_INDEX 0→He=8，1→He=32。有 /dev/nvidia-modeset 走 NVIDIA Vulkan。
 # =============================================================================
-# 提交：算法包 cwr_wulan_algorithm
-#   batch1: train_skip_phase.sh
-#   batch2: train_skip_phase_batch2.sh
-# 挂载：wulann + wulann2 + wulann3 + wulann4；超时 ≥18h（baseline+skip）
 set -euo pipefail
-# Requires AHA-WAM-anygrasp: eval_robotwin_single abs-ICD + test_render exit(1) + sweep job_complete fix
 
-echo "train_skip_phase.sh revision: 2026-09-09-main2-nort-v6"
-SKIP_PHASE_BATCH="${SKIP_PHASE_BATCH:-batch1}"
+REVISION="2026-09-15-he-adapt-eval-30eps-nvidia"
+echo "train_eval_he_adapt.sh revision: ${REVISION}"
+echo "EXPERIMENT=HE_ADAPT_EVAL (He=8 vs He=32; ah64/cpp1/always; 8 tasks × 30 ep)"
+
+# ===================== 写死配置 =====================
 SMOKE=0
+if [[ "${SMOKE}" == "1" ]]; then
+    echo "ERROR: SMOKE=1 blocked for He-adapt formal eval (set SMOKE=0)."
+    exit 1
+fi
 SMOKE_NUM_EPISODES=1
-FULL_NUM_EPISODES=40
+FULL_NUM_EPISODES=30
 export FIXED_ACTION_HORIZON=64
-export FIXED_CPP=2
+export FIXED_CPP=1
+export VIDEO_DIT_MODE=baseline
+# baseline-only always prefill（不是 skip_phase）
 export SKIP_PHASE_NEAR_THRESH_M=0.10
 export SKIP_PHASE_MAX_CONSECUTIVE_SKIPS=1
 export OVCR_DIAG_MODE=baseline
-export SKIP_PHASE_BATCH
+export ROBOTWIN_EVAL_VIDEO_LOG=0
+EVAL_MODES=(baseline)
 
-# Released ckpt
-export SKIP_PHASE_CKPT="${SKIP_PHASE_CKPT:-/opt/huawei/dataset/cwr_dataset_wulann/AHA-WAM-anygrasp/checkpoints/AHA-WAM-RoboTwin2.0/robotwin_ahawam.pt}"
-export SKIP_PHASE_DATASET_STATS="${SKIP_PHASE_DATASET_STATS:-/opt/huawei/dataset/cwr_dataset_wulann/AHA-WAM-anygrasp/checkpoints/AHA-WAM-RoboTwin2.0/dataset_stats.json}"
-EVAL_MODES=(baseline skip_phase)
+# arm: auto | 8 | 32
+# auto: 仅 2×8 同 job — rank0=He8, rank1=He32
+_ARM_IN="${HE_ADAPT_ARM:-auto}"
+HE_ADAPT_ARM="${_ARM_IN}"
+MACHINE_RANK="${VC_TASK_INDEX:-}"
+if [[ "${HE_ADAPT_ARM}" == "auto" ]]; then
+    _hosts="${MA_NUM_HOSTS:-1}"
+    if [[ ! "${_hosts}" =~ ^[0-9]+$ ]] || [[ "${_hosts}" -ne 2 ]]; then
+        echo "ERROR: HE_ADAPT_ARM=auto requires MA_NUM_HOSTS=2 (got MA_NUM_HOSTS=${MA_NUM_HOSTS:-<unset>})"
+        echo "  → 16 卡同测请交 2×8；或改用 train_eval_he8.sh / train_eval_he32.sh 各 8 卡"
+        exit 1
+    fi
+    if [[ -z "${MACHINE_RANK}" ]]; then
+        echo "ERROR: HE_ADAPT_ARM=auto requires VC_TASK_INDEX (0→He=8, 1→He=32)"
+        exit 1
+    fi
+    if [[ "${MACHINE_RANK}" == "0" ]]; then
+        HE_ADAPT_ARM="8"
+    elif [[ "${MACHINE_RANK}" == "1" ]]; then
+        HE_ADAPT_ARM="32"
+    else
+        echo "ERROR: VC_TASK_INDEX=${MACHINE_RANK} not in {0,1} for auto He adapt"
+        exit 1
+    fi
+fi
+export HE_ADAPT_ARM
+export SKIP_PHASE_BATCH="he_adapt8"
+echo "HE_ADAPT_ARM=${HE_ADAPT_ARM} (request=${_ARM_IN}) MACHINE_RANK=${MACHINE_RANK:-<n/a>} FIXED_CPP=${FIXED_CPP} ah=${FIXED_ACTION_HORIZON}"
 
-case "${SKIP_PHASE_BATCH}" in
-batch1)
-    HARDCODED_OUTPUT_DIR="/opt/huawei/dataset/cwr_dataset_wulann4/aha-wam-runs/robotwin/video_dit_skip_phase_smoke_v2"
-    HARDCODED_OUTPUT_DIR_FULL="/opt/huawei/dataset/cwr_dataset_wulann4/aha-wam-runs/robotwin/video_dit_skip_phase_40eps_v2"
-    SKIP_PHASE_TASKS=(
-        handover_mic hanging_mug move_stapler_pad place_bread_basket place_mouse_pad
-        place_object_basket stack_blocks_three stack_blocks_two click_bell
-    )
+RELEASED_STATS=""
+_pick_latest_ckpt() {
+    local d="$1"
+    local latest=""
+    local f
+    for f in "${d}/checkpoints/weights"/step_*.pt; do
+        [[ -f "${f}" ]] || continue
+        latest="${f}"
+    done
+    echo "${latest}"
+}
+
+case "${HE_ADAPT_ARM}" in
+8)
+    TRAIN_LEAF="he8_adapt_8x10h"
+    EVAL_LEAF_SMOKE="he8_adapt_always_smoke"
+    EVAL_LEAF="he8_adapt_always_30eps"
+    export EVAL_HYDRA_TASK="${EVAL_HYDRA_TASK:-robotwin_ahawam_he8}"
     ;;
-batch2)
-    echo "train_skip_phase.sh revision: 2026-09-09-main2-nort-v6-batch2"
-    HARDCODED_OUTPUT_DIR="/opt/huawei/dataset/cwr_dataset_wulann4/aha-wam-runs/robotwin/video_dit_skip_phase_smoke_v2_batch2"
-    HARDCODED_OUTPUT_DIR_FULL="/opt/huawei/dataset/cwr_dataset_wulann4/aha-wam-runs/robotwin/video_dit_skip_phase_40eps_v2_batch2"
-    SKIP_PHASE_TASKS=(
-        pick_dual_bottles pick_diverse_bottles place_a2b_left place_a2b_right move_can_pot
-        stack_bowls_three handover_block lift_pot press_stapler turn_switch
-    )
+32)
+    TRAIN_LEAF="he32_adapt_8x10h"
+    EVAL_LEAF_SMOKE="he32_adapt_always_smoke"
+    EVAL_LEAF="he32_adapt_always_30eps"
+    export EVAL_HYDRA_TASK="${EVAL_HYDRA_TASK:-robotwin_ahawam_he32}"
     ;;
 *)
-    echo "ERROR: unknown SKIP_PHASE_BATCH=${SKIP_PHASE_BATCH} (expected batch1|batch2)"
+    echo "ERROR: HE_ADAPT_ARM must be auto|8|32, got ${HE_ADAPT_ARM}"
     exit 1
     ;;
 esac
+
+# Mix of lower / mid-high MAIN-2 NVIDIA SR (avoid floor tasks like lift_pot / open_*).
+# Lower: handover_mic 27.5, hanging_mug 37.5, place_a2b_left 22.5, place_object_basket 20
+# Higher: stack_blocks_two 57.5, pick_dual_bottles 80, place_bread_basket 72.5, turn_switch 52.5
+SKIP_PHASE_TASKS=(
+    handover_mic hanging_mug place_a2b_left place_object_basket
+    stack_blocks_two pick_dual_bottles place_bread_basket turn_switch
+)
 # ================================================================
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "${SCRIPT_DIR}"
 echo "code dir: $(pwd)"
 
-# ---------- 路径（自动探测，无需手动 set）----------
-if [[ -d "/opt/huawei/dataset/cwr_dataset_wulann/AHA-WAM-anygrasp" ]]; then
-    export DATA="/opt/huawei/dataset"
-    export AHA_WAM_CODE_DIR="${DATA}/cwr_dataset_wulann/AHA-WAM-anygrasp"
-else
-    export DATA="/home/ma-user/work/dataset"
-    export AHA_WAM_CODE_DIR="${DATA}/cwr_dataset_wulann/AHA-WAM-anygrasp"
+# ---------- 路径（旧 wulann / 新 cwr_wulan_aha）----------
+_PATHS="${SCRIPT_DIR}/cluster_paths.sh"
+if [[ ! -f "${_PATHS}" ]]; then
+    _PATHS="${SCRIPT_DIR}/infra/cluster_paths.sh"
 fi
+# shellcheck disable=SC1090
+source "${_PATHS}"
+
+TRAIN_DIR="${RUNS_ROOT}/train/${TRAIN_LEAF}"
+HARDCODED_OUTPUT_DIR="${RUNS_ROOT}/robotwin/${EVAL_LEAF_SMOKE}"
+HARDCODED_OUTPUT_DIR_FULL="${RUNS_ROOT}/robotwin/${EVAL_LEAF}"
+RELEASED_STATS="${NORM_STATS:-${AHA_WAM_CODE_DIR}/infra/assets/robotwin_dataset_stats.json}"
 
 # Prefer shared offline wheels (sapien 3.0.3 is NOT on Huawei mirror; needs cp310+)
 _wheels_has_sapien() {
@@ -82,9 +132,9 @@ _wheels_has_sapien() {
 
 WHEELS_DIR=""
 for _w in \
+    "${DATA}/cwr_wulan_aha/wheels" \
     "${DATA}/cwr_dataset_wulann/wheels" \
-    "${DATA}/cwr_dataset_wulann4/wheels" \
-    "${DATA}/cwr_wulan_aha/wheels"
+    "${DATA}/cwr_dataset_wulann4/wheels"
 do
     if _wheels_has_sapien "${_w}"; then
         WHEELS_DIR="${_w}"
@@ -96,17 +146,41 @@ do
 done
 echo "AHA_WAM_CODE_DIR: ${AHA_WAM_CODE_DIR}"
 echo "WHEELS_DIR: ${WHEELS_DIR:-<missing>}"
-echo "SKIP_PHASE_BATCH=${SKIP_PHASE_BATCH} tasks=${#SKIP_PHASE_TASKS[@]}"
-echo "FIXED ah=${FIXED_ACTION_HORIZON} cpp=${FIXED_CPP} near=${SKIP_PHASE_NEAR_THRESH_M} max_consec_skip=${SKIP_PHASE_MAX_CONSECUTIVE_SKIPS} OVCR=${OVCR_DIAG_MODE}"
+echo "HE_ADAPT_ARM=${HE_ADAPT_ARM} SKIP_PHASE_BATCH=${SKIP_PHASE_BATCH} tasks=${#SKIP_PHASE_TASKS[@]}"
+echo "FIXED ah=${FIXED_ACTION_HORIZON} cpp=${FIXED_CPP} hydra_task=${EVAL_HYDRA_TASK} OVCR=${OVCR_DIAG_MODE}"
 
-# Explore-machine path fallback for ckpt/stats
+# Explore-machine path fallback for train dir / ckpt / stats
 if [[ ! -d "/opt/huawei/dataset" ]]; then
-    SKIP_PHASE_CKPT="${SKIP_PHASE_CKPT/\/opt\/huawei\/dataset/${DATA}}"
-    SKIP_PHASE_DATASET_STATS="${SKIP_PHASE_DATASET_STATS/\/opt\/huawei\/dataset/${DATA}}"
-    export SKIP_PHASE_CKPT SKIP_PHASE_DATASET_STATS
+    TRAIN_DIR="${TRAIN_DIR/\/opt\/huawei\/dataset/${DATA}}"
+    RELEASED_STATS="${RELEASED_STATS/\/opt\/huawei\/dataset/${DATA}}"
+    if [[ -n "${SKIP_PHASE_CKPT:-}" ]]; then
+        SKIP_PHASE_CKPT="${SKIP_PHASE_CKPT/\/opt\/huawei\/dataset/${DATA}}"
+    fi
+    if [[ -n "${SKIP_PHASE_DATASET_STATS:-}" ]]; then
+        SKIP_PHASE_DATASET_STATS="${SKIP_PHASE_DATASET_STATS/\/opt\/huawei\/dataset/${DATA}}"
+    fi
 fi
-echo "SKIP_PHASE_CKPT=${SKIP_PHASE_CKPT}"
-echo "SKIP_PHASE_DATASET_STATS=${SKIP_PHASE_DATASET_STATS}"
+if [[ -z "${SKIP_PHASE_CKPT:-}" || ! -f "${SKIP_PHASE_CKPT:-/}" ]]; then
+    SKIP_PHASE_CKPT="$(_pick_latest_ckpt "${TRAIN_DIR}")"
+fi
+if [[ -z "${SKIP_PHASE_DATASET_STATS:-}" || ! -f "${SKIP_PHASE_DATASET_STATS:-/}" ]]; then
+    if [[ -f "${TRAIN_DIR}/dataset_stats.json" ]]; then
+        SKIP_PHASE_DATASET_STATS="${TRAIN_DIR}/dataset_stats.json"
+    else
+        SKIP_PHASE_DATASET_STATS="${RELEASED_STATS}"
+    fi
+fi
+export SKIP_PHASE_CKPT SKIP_PHASE_DATASET_STATS EVAL_HYDRA_TASK TRAIN_DIR
+if [[ -z "${SKIP_PHASE_CKPT:-}" || ! -f "${SKIP_PHASE_CKPT}" ]]; then
+    echo "ERROR: He=${HE_ADAPT_ARM} ckpt missing. Expected step_*.pt under ${TRAIN_DIR}/checkpoints/weights/"
+    echo "  Train first (train_finetune_he_adapt.sh) or export SKIP_PHASE_CKPT=..."
+    ls -lah "${TRAIN_DIR}/checkpoints/weights" 2>/dev/null || true
+    exit 1
+fi
+echo "TRAIN_DIR=${TRAIN_DIR}"
+echo "SKIP_PHASE_CKPT=${SKIP_PHASE_CKPT:-<missing>}"
+echo "SKIP_PHASE_DATASET_STATS=${SKIP_PHASE_DATASET_STATS:-<missing>}"
+echo "EVAL_HYDRA_TASK=${EVAL_HYDRA_TASK}"
 
 # ---------- 运行环境变量（CUDA）----------
 export WANDB_MODE="offline"
@@ -135,13 +209,18 @@ fi
 if [[ ! -d "/opt/huawei/dataset" ]]; then
     OUTPUT_DIR="${OUTPUT_DIR/\/opt\/huawei\/dataset/${DATA}}"
 fi
+if [[ "${OUTPUT_DIR}" == *smoke* ]]; then
+    echo "ERROR: formal eval OUTPUT_DIR looks like smoke: ${OUTPUT_DIR}"
+    exit 1
+fi
 
 echo "SMOKE=${SMOKE} NUM_EPISODES=${NUM_EPISODES}"
 echo "NNPU=${NNPU} NNODES=${NNODES} NODE_RANK=${NODE_RANK} MASTER_ADDR=${MASTER_ADDR}"
 echo "OUTPUT_DIR=${OUTPUT_DIR}"
-# 40 eps ≈ 6h+；默认 12h，避免跑到 38/40 被杀掉
-export JOB_TIMEOUT_S="${JOB_TIMEOUT_S:-64800}"
+# 8×30 on 8 GPU + NVIDIA modeset；He=8 Video 更密。standalone 默认 12h；链式调用会覆盖为剩余墙钟。
+export JOB_TIMEOUT_S="${JOB_TIMEOUT_S:-43200}"
 echo "JOB_TIMEOUT_S=${JOB_TIMEOUT_S}"
+echo "EVAL_MODES=${EVAL_MODES[*]} (always/baseline Video DiT; FIXED_CPP=${FIXED_CPP} EVAL_HYDRA_TASK=${EVAL_HYDRA_TASK})"
 
 # ---------- pip：华为源默认；sapien 等缺包时再走 PyPI ----------
 export PIP_INDEX_URL="http://repo.myhuaweicloud.com/repository/pypi/simple"
@@ -155,6 +234,8 @@ PYPI_INDEX_URL="https://pypi.org/simple"
 # ---------- 强制 Python >=3.10（sapien 3.0.3 无 cp39 wheel；禁止镜像默认 3.9）----------
 resolve_python() {
     local candidates=(
+        "${AHAWAM_ENV_PREFIX}/bin/python"
+        "${DATA}/cwr_wulan_aha/envs/ahawam/bin/python"
         "${DATA}/cwr_dataset_wulann4/envs/ahawam/bin/python"
         "/home/ma-user/anaconda3/envs/ahawam/bin/python"
         "${HOME}/anaconda3/envs/ahawam/bin/python"
@@ -174,7 +255,7 @@ if PYTHON="$(resolve_python)"; then
     echo "Found Python>=3.10: ${PYTHON}"
 else
     echo "ERROR: need Python>=3.10 for sapien==3.0.3 (image python3.9 cannot install it)"
-    echo "Mount wulann4 (envs/ahawam) or create that env, then resubmit."
+    echo "Create/mount env at \${DATA}/cwr_wulan_aha/envs/ahawam (new) or cwr_dataset_wulann4/envs/ahawam (old)."
     exit 1
 fi
 export PYTHON
@@ -187,8 +268,8 @@ PY
 # sapien 无头渲染（对齐 setup_env.sh）：
 #   方案A：NVIDIA ICD（需要创建时注入 graphics + 可用 /dev/nvidia-modeset）
 #   方案B：modeset 不可用时自动 lavapipe（软件 Vulkan；全量会很慢）
-SAPIEN_LIBS="${DATA}/cwr_dataset_wulann/sapien-runtime-libs"
-NVIDIA_DRIVER_DIR="${DATA}/cwr_dataset_wulann/nvidia-driver-libs/nvidia-535.183.01"
+SAPIEN_LIBS="${SAPIEN_LIBS:-${DATA}/cwr_dataset_wulann/sapien-runtime-libs}"
+NVIDIA_DRIVER_DIR="${NVIDIA_DRIVER_DIR:-${DATA}/cwr_dataset_wulann/nvidia-driver-libs/nvidia-535.183.01}"
 # 强制覆盖平台注入的 compute,utility（仅环境变量；modeset 仍依赖创建时 toolkit）
 export NVIDIA_DRIVER_CAPABILITIES="compute,utility,graphics,display,video"
 echo "NVIDIA_DRIVER_CAPABILITIES=${NVIDIA_DRIVER_CAPABILITIES} (forced)"
@@ -230,12 +311,30 @@ export DIFFSYNTH_MODEL_BASE_PATH="${AHA_WAM_CODE_DIR}/checkpoints"
 export HF_HUB_OFFLINE=1
 export TRANSFORMERS_OFFLINE=1
 
-# ---------- 离线安装依赖（不覆盖镜像 CUDA torch；只写 /tmp user site）----------
+# ---------- 依赖：优先复用已装好的 user site；缺啥补啥（不覆盖镜像 CUDA torch）----------
+# PYTHONUSERBASE 默认 /tmp/ahawam_user；可设 AHAWAM_EVAL_USERBASE 指向持久目录（同节点复用）
+# FORCE_REINSTALL_DEPS=1 强制整栈重装
+_EVAL_UB_CANDIDATES=()
+if [[ -n "${AHAWAM_EVAL_USERBASE:-}" ]]; then
+    _EVAL_UB_CANDIDATES+=("${AHAWAM_EVAL_USERBASE}")
+fi
+_EVAL_UB_CANDIDATES+=(
+    "${DATA}/cwr_dataset_wulann4/envs/ahawam_robotwin_user"
+    "${DATA}/cwr_dataset_wulann/envs/ahawam_robotwin_user"
+    "/tmp/ahawam_user"
+)
 export PYTHONUSERBASE="/tmp/ahawam_user"
+for _ub in "${_EVAL_UB_CANDIDATES[@]}"; do
+    if [[ -d "${_ub}/lib" ]] || [[ -n "${AHAWAM_EVAL_USERBASE:-}" && "${_ub}" == "${AHAWAM_EVAL_USERBASE}" ]]; then
+        export PYTHONUSERBASE="${_ub}"
+        break
+    fi
+done
 mkdir -p "${PYTHONUSERBASE}"
 PYVER="$("${PYTHON}" -c 'import sys; print(f"{sys.version_info.major}.{sys.version_info.minor}")')"
 export PATH="$(dirname "${PYTHON}"):${PYTHONUSERBASE}/bin:${PATH}"
 export PYTHONPATH="${PYTHONUSERBASE}/lib/python${PYVER}/site-packages:${AHA_WAM_CODE_DIR}:${AHA_WAM_CODE_DIR}/src${PYTHONPATH:+:${PYTHONPATH}}"
+echo "PYTHONUSERBASE=${PYTHONUSERBASE}"
 
 _pip() {
     "${PYTHON}" -m pip "$@"
@@ -245,56 +344,180 @@ _need_import() {
     ! "${PYTHON}" -c "import $1" >/dev/null 2>&1
 }
 
-_install_robotwin_stack() {
-    local mode="$1"  # wheels | hybrid | pypi
-    # Must cover every third-party import on RoboTwin startup:
-    # script/eval_policy.py -> envs -> utils (incl. pkl2hdf5/h5py) -> _base_task path
-    local common=(
-        "numpy==1.26.4"
-        "opencv-python==4.8.1.78"
-        transforms3d lxml pyperclip importlib_resources
-        "sapien==3.0.3"
-        "open3d==0.18.0"
-        "mplib==0.2.1" toppra scipy
-        gymnasium farama-notifications cloudpickle
-        trimesh yourdfpy networkx
-        "h5py==3.16.0"
-        imageio imageio-ffmpeg
-        PyYAML hydra-core omegaconf einops
-        "transformers==4.49.0" av pandas pyarrow
-        pillow wandb rich
-    )
-    if [[ "${mode}" == "wheels" ]]; then
-        _pip install --user --no-index --find-links "${WHEELS_DIR}" "${common[@]}"
-    elif [[ "${mode}" == "hybrid" ]]; then
-        # Prefer local wheels (esp. sapien); fill gaps from PyPI (Huawei lacks sapien 3.0.3)
-        _pip install --user --find-links "${WHEELS_DIR}" --index-url "${PYPI_INDEX_URL}" "${common[@]}"
+# import_name -> pip_spec（RoboTwin 启动路径上的第三方）
+_ROBOTWIN_SPECS=(
+    "numpy:numpy==1.26.4"
+    "cv2:opencv-python==4.8.1.78"
+    "transforms3d:transforms3d"
+    "lxml:lxml"
+    "pyperclip:pyperclip"
+    "importlib_resources:importlib_resources"
+    "sapien:sapien==3.0.3"
+    "open3d:open3d==0.18.0"
+    "mplib:mplib==0.2.1"
+    "toppra:toppra"
+    "scipy:scipy"
+    "gymnasium:gymnasium"
+    "farama_notifications:farama-notifications"
+    "cloudpickle:cloudpickle"
+    "trimesh:trimesh"
+    "yourdfpy:yourdfpy"
+    "networkx:networkx"
+    "h5py:h5py==3.16.0"
+    "imageio:imageio"
+    "imageio_ffmpeg:imageio-ffmpeg"
+    "yaml:PyYAML"
+    "hydra:hydra-core"
+    "omegaconf:omegaconf"
+    "einops:einops"
+    "transformers:transformers==4.49.0"
+    "av:av"
+    "pandas:pandas"
+    "pyarrow:pyarrow"
+    "PIL:pillow"
+    "wandb:wandb"
+    "rich:rich"
+)
+
+_robotwin_imports_ok() {
+    local pair mod
+    for pair in "${_ROBOTWIN_SPECS[@]}"; do
+        mod="${pair%%:*}"
+        if ! "${PYTHON}" -c "import ${mod}" >/dev/null 2>&1; then
+            return 1
+        fi
+    done
+    "${PYTHON}" -c 'import sapien; assert sapien.__version__.startswith("3.0")' >/dev/null 2>&1
+}
+
+_missing_robotwin_pkgs() {
+    local pair mod spec
+    local miss=()
+    for pair in "${_ROBOTWIN_SPECS[@]}"; do
+        mod="${pair%%:*}"
+        spec="${pair#*:}"
+        if ! "${PYTHON}" -c "import ${mod}" >/dev/null 2>&1; then
+            miss+=("${spec}")
+        fi
+    done
+    # sapien 版本不对也重装
+    if "${PYTHON}" -c "import sapien" >/dev/null 2>&1; then
+        if ! "${PYTHON}" -c 'import sapien; assert sapien.__version__.startswith("3.0")' >/dev/null 2>&1; then
+            miss+=("sapien==3.0.3")
+        fi
+    fi
+    printf '%s\n' "${miss[@]}"
+}
+
+# Map pip spec -> local wheel path if present (forces NFS file, avoids slow PyPI for big pkgs).
+# find-links+index still often pulls from PyPI; installing by path does not.
+_find_local_wheel() {
+    local spec="$1"
+    local dir="${WHEELS_DIR:-/nonexistent}"
+    [[ -d "${dir}" ]] || return 1
+    local name ver
+    if [[ "${spec}" == *==* ]]; then
+        name="${spec%%==*}"
+        ver="${spec#*==}"
     else
-        _pip install --user --index-url "${PYPI_INDEX_URL}" "${common[@]}"
+        name="${spec}"
+        ver=""
+    fi
+    local dist="${name//-/_}"
+    local f
+    if [[ -n "${ver}" ]]; then
+        for f in "${dir}/${name}-${ver}-"*.whl "${dir}/${dist}-${ver}-"*.whl; do
+            [[ -f "${f}" ]] || continue
+            # skip known corrupt tiny sapien stub if any leftover
+            if [[ "$(basename "${f}")" == sapien-* ]] && [[ "$(stat -c%s "${f}" 2>/dev/null || echo 0)" -lt 5000000 ]]; then
+                continue
+            fi
+            echo "${f}"
+            return 0
+        done
+    else
+        # unpinned: use any matching wheel (prefer first)
+        for f in "${dir}/${name}-"*.whl "${dir}/${dist}-"*.whl; do
+            [[ -f "${f}" ]] || continue
+            echo "${f}"
+            return 0
+        done
+    fi
+    return 1
+}
+
+_pip_install_pkgs() {
+    local mode="$1"
+    shift
+    local pkgs=("$@")
+    [[ ${#pkgs[@]} -eq 0 ]] && return 0
+    if [[ "${mode}" == "wheels" ]]; then
+        _pip install --user --no-index --find-links "${WHEELS_DIR}" "${pkgs[@]}"
+    elif [[ "${mode}" == "hybrid" ]]; then
+        local local_files=()
+        local remote_specs=()
+        local spec wh
+        for spec in "${pkgs[@]}"; do
+            if wh="$(_find_local_wheel "${spec}")"; then
+                local_files+=("${wh}")
+                echo "  local wheel: ${spec} -> ${wh}"
+            else
+                remote_specs+=("${spec}")
+                echo "  remote PyPI: ${spec}"
+            fi
+        done
+        # 1) install big/local wheels by path (NFS copy); deps still resolved from PyPI
+        if [[ ${#local_files[@]} -gt 0 ]]; then
+            echo "install ${#local_files[@]} local wheel file(s) ..."
+            _pip install --user --index-url "${PYPI_INDEX_URL}" "${local_files[@]}"
+        fi
+        # 2) remaining specs not in wheels/
+        if [[ ${#remote_specs[@]} -gt 0 ]]; then
+            echo "install ${#remote_specs[@]} remaining from PyPI: ${remote_specs[*]}"
+            _pip install --user --index-url "${PYPI_INDEX_URL}" "${remote_specs[@]}"
+        fi
+    else
+        _pip install --user --index-url "${PYPI_INDEX_URL}" "${pkgs[@]}"
     fi
 }
 
 echo "--- install RoboTwin/sapien deps ---"
-if _wheels_has_sapien "${WHEELS_DIR:-/nonexistent}"; then
-    echo "WHEELS_DIR=${WHEELS_DIR} (valid sapien wheel) -> hybrid install"
-    if [[ -f "${AHA_WAM_CODE_DIR}/requirements.txt" ]]; then
-        _pip install --user --find-links "${WHEELS_DIR}" --index-url "${PYPI_INDEX_URL}" \
-            -r "${AHA_WAM_CODE_DIR}/requirements.txt" || true
-    fi
-    _install_robotwin_stack hybrid
+FORCE_REINSTALL_DEPS="${FORCE_REINSTALL_DEPS:-0}"
+SKIP_PIP=0
+if [[ "${FORCE_REINSTALL_DEPS}" != "1" ]] && _robotwin_imports_ok; then
+    SKIP_PIP=1
+    echo "robotwin imports already ok -> skip pip (FORCE_REINSTALL_DEPS=1 to override)"
 else
-    echo "No valid local sapien-3.0.3 wheel; install RoboTwin stack from PyPI (not Huawei)"
-    if [[ -f "${AHA_WAM_CODE_DIR}/requirements.txt" ]]; then
-        _pip install --user --index-url "${PIP_INDEX_URL}" --trusted-host "${PIP_TRUSTED_HOST}" \
-            -r "${AHA_WAM_CODE_DIR}/requirements.txt" || true
+    mapfile -t _MISS_PKGS < <(_missing_robotwin_pkgs | awk 'NF' | sort -u)
+    if [[ "${FORCE_REINSTALL_DEPS}" == "1" ]]; then
+        echo "FORCE_REINSTALL_DEPS=1 -> full robotwin stack reinstall"
+        _MISS_PKGS=()
+        for pair in "${_ROBOTWIN_SPECS[@]}"; do
+            _MISS_PKGS+=("${pair#*:}")
+        done
     fi
-    _install_robotwin_stack pypi
+    if [[ ${#_MISS_PKGS[@]} -eq 0 ]]; then
+        SKIP_PIP=1
+        echo "no missing robotwin pkgs -> skip pip"
+    else
+        echo "missing pkgs (${#_MISS_PKGS[@]}): ${_MISS_PKGS[*]}"
+        if _wheels_has_sapien "${WHEELS_DIR:-/nonexistent}"; then
+            echo "WHEELS_DIR=${WHEELS_DIR} (valid sapien wheel) -> local-path + PyPI hybrid"
+            _pip_install_pkgs hybrid "${_MISS_PKGS[@]}"
+        else
+            echo "No valid local sapien-3.0.3 wheel; install missing from PyPI (not Huawei)"
+            _pip_install_pkgs pypi "${_MISS_PKGS[@]}"
+        fi
+    fi
 fi
+echo "deps gate: skip_pip=${SKIP_PIP} userbase=${PYTHONUSERBASE}"
 
 # Hard gate: do not continue without sapien
 if ! "${PYTHON}" -c 'import sapien; assert sapien.__version__.startswith("3.0")' >/dev/null 2>&1; then
-    echo "ERROR: sapien==3.0.x import failed after install"
+    echo "ERROR: sapien==3.0.x import failed after install/skip"
     "${PYTHON}" -c 'import sapien' || true
+    echo "HINT: /tmp may lack sapien; set AHAWAM_EVAL_USERBASE to a shared dir after one successful install,"
+    echo "      or fix wheels/sapien-3.0.3-*.whl (current stub is invalid zip)."
     exit 1
 fi
 echo "sapien import: ok ($("${PYTHON}" -c 'import sapien; print(sapien.__version__)'))"
@@ -443,14 +666,29 @@ EOF
     fi
     echo "Vulkan: lavapipe (方案B software) ICD=${LVP_ICD} SO=${LVP_SO:-?}"
     if [[ "${SMOKE}" != "1" ]]; then
-        echo "WARNING: FULL eval on lavapipe is VERY slow (CPU render). Prefer SMOKE=1 first."
+        echo "WARNING: FULL eval on lavapipe is VERY slow (CPU render)."
+        echo "WARNING: expect multi-x wall time vs GPU Vulkan; watch first episode ETA in sweep_master.log."
+        echo "WARNING: platform timeout should be >= JOB_TIMEOUT_S (ft default 48h / random 24h)."
     fi
 fi
 export AHAWAM_VULKAN_MODE
+
+# lavapipe: drop NVIDIA userspace GL/Vulkan stubs (they segfault on URDF without modeset)
 if [[ "${AHAWAM_VULKAN_MODE}" == "lavapipe" ]]; then
-    # RoboTwin _base_task defaults to ray-tracing+oidn; lavapipe segfaults on that path.
     export SAPIEN_DISABLE_RAYTRACING=1
+    export ROBOTWIN_MPLIB_NO_SAPIEN_WORLD=1
+    export ROBOTWIN_MPLIB_STUB=1
+    _new_ld=""
+    IFS=':' read -r -a _ld_parts <<< "${LD_LIBRARY_PATH:-}"
+    for _p in "${_ld_parts[@]}"; do
+        [[ -z "${_p}" ]] && continue
+        [[ "${_p}" == *nvidia-driver-libs* ]] && continue
+        _new_ld="${_new_ld:+${_new_ld}:}${_p}"
+    done
+    export LD_LIBRARY_PATH="/usr/lib/x86_64-linux-gnu${_new_ld:+:${_new_ld}}"
+    echo "lavapipe: stripped nvidia-driver-libs from LD_LIBRARY_PATH"
 fi
+
 echo "AHAWAM_VULKAN_MODE=${AHAWAM_VULKAN_MODE}"
 echo "SAPIEN_DISABLE_RAYTRACING=${SAPIEN_DISABLE_RAYTRACING:-0}"
 echo "SAPIEN_VULKAN_LIBRARY_PATH=${SAPIEN_VULKAN_LIBRARY_PATH:-<empty>}"
@@ -535,7 +773,7 @@ print(f"asset ok: {tc}")
 emb = Path(os.environ["AHA_WAM_CODE_DIR"]) / "third_party/RoboTwin/assets/embodiments/aloha-agilex"
 assert emb.is_dir(), f"missing embodiment assets: {emb}"
 print(f"asset ok: {emb}")
-print(f"EVAL CKPT (released): {ckpt}")
+print(f"EVAL CKPT (he_adapt): {ckpt}")
 
 # RoboTwin: same import path as eval_policy.py + all task modules + policy bridge
 rt = Path(os.environ["AHA_WAM_CODE_DIR"]) / "third_party/RoboTwin"
@@ -565,15 +803,47 @@ import generate_episode_instructions  # noqa: F401
 import deploy_policy  # noqa: F401
 print("generate_episode_instructions + deploy_policy: ok")
 
-# Sapien renderer smoke (nvidia or lavapipe)
+# Sapien renderer smoke — match RoboTwin setup_scene (no RT, no shadow on lavapipe)
 try:
+    print("preflight SAPIEN_DISABLE_RAYTRACING=", os.environ.get("SAPIEN_DISABLE_RAYTRACING"))
+    print("preflight ROBOTWIN_EVAL_VIDEO_LOG=", os.environ.get("ROBOTWIN_EVAL_VIDEO_LOG"))
     renderer = sapien.render.SapienRenderer()
     print("SapienRenderer: ok mode=", os.environ.get("AHAWAM_VULKAN_MODE"))
-    scene = sapien.Scene()
-    print("sapien.Scene: ok")
+    engine = sapien.Engine()
+    engine.set_renderer(renderer)
+    scene = engine.create_scene(sapien.SceneConfig())
+    print("create_scene: ok")
+    scene.add_ground(0)
+    scene.set_ambient_light([0.5, 0.5, 0.5])
+    # Must match _base_task lavapipe path: shadow=False (shadow=True SEGVs on lavapipe)
+    scene.add_directional_light([0, 0.5, -1], [0.5, 0.5, 0.5], shadow=False)
+    scene.add_point_light([1, 0, 1.8], [1, 1, 1], shadow=False)
+    print("lights shadow=False: ok")
+    # Same crash site as eval: aloha dual-arm URDF under lavapipe (+ bad LD path)
+    urdf = Path(os.environ["AHA_WAM_CODE_DIR"]) / (
+        "third_party/RoboTwin/assets/embodiments/aloha-agilex/urdf/arx5_description_isaac.urdf"
+    )
+    if not urdf.is_file():
+        # fallback common names
+        cand = list((Path(os.environ["AHA_WAM_CODE_DIR"]) / "third_party/RoboTwin/assets/embodiments/aloha-agilex").rglob("*.urdf"))
+        urdf = cand[0] if cand else None
+    if urdf is None or not Path(urdf).is_file():
+        raise FileNotFoundError("aloha urdf missing for preflight")
+    print("preflight URDF load:", urdf)
+    rt_root = Path(os.environ["AHA_WAM_CODE_DIR"]) / "third_party/RoboTwin"
+    _cwd = os.getcwd()
+    os.chdir(rt_root)
+    try:
+        loader = scene.create_urdf_loader()
+        loader.fix_root_link = True
+        ent = loader.load(str(urdf))
+        print("preflight URDF load: ok", type(ent))
+    finally:
+        os.chdir(_cwd)
+    print("sapien.Scene: ok (lavapipe-safe preflight incl. URDF)")
 except Exception as e:
     import glob
-    print("ERROR: SapienRenderer failed:", repr(e))
+    print("ERROR: SapienRenderer/scene preflight failed:", repr(e))
     print("AHAWAM_VULKAN_MODE=", os.environ.get("AHAWAM_VULKAN_MODE"))
     print("NVIDIA_DRIVER_CAPABILITIES=", os.environ.get("NVIDIA_DRIVER_CAPABILITIES"))
     print("VK_ICD_FILENAMES=", os.environ.get("VK_ICD_FILENAMES"))
@@ -598,64 +868,28 @@ if [[ -d "${POLICY_SRC}" && -d "$(dirname "${POLICY_LINK}")" ]]; then
     ln -sfn "${POLICY_SRC}" "${POLICY_LINK}"
     echo "policy symlink: ${POLICY_LINK} -> ${POLICY_SRC}"
     ls -l "${POLICY_LINK}" || true
-    # skip_phase FSM must be visible through the policy package
-    if [[ ! -f "${POLICY_SRC}/skip_phase_fsm.py" ]]; then
-        echo "ERROR: missing ${POLICY_SRC}/skip_phase_fsm.py"
-        exit 1
-    fi
     if [[ ! -f "${AHA_WAM_CODE_DIR}/experiments/robotwin/run_skip_phase_sweep.py" ]]; then
         echo "ERROR: missing run_skip_phase_sweep.py"
         exit 1
     fi
+    echo "preflight: arm=${HE_ADAPT_ARM} cpp=${FIXED_CPP} hydra=${EVAL_HYDRA_TASK} modes=${EVAL_MODES[*]} tasks=${#SKIP_PHASE_TASKS[@]} ckpt=${SKIP_PHASE_CKPT}"
+    if [[ ! -f "${SKIP_PHASE_CKPT}" ]]; then
+        echo "ERROR: ckpt missing: ${SKIP_PHASE_CKPT}"
+        exit 1
+    fi
+    if [[ ! -f "${SKIP_PHASE_DATASET_STATS}" ]]; then
+        echo "ERROR: dataset_stats missing: ${SKIP_PHASE_DATASET_STATS}"
+        exit 1
+    fi
+    # sweep must honor FIXED_CPP from env
     "${PYTHON}" - <<'PY'
-import importlib.util
 import os
-import sys
 from pathlib import Path
-
-code_dir = Path(os.environ["AHA_WAM_CODE_DIR"])
-fsm_path = code_dir / "experiments/robotwin/ahawam_policy/skip_phase_fsm.py"
-sweep_path = code_dir / "experiments/robotwin/run_skip_phase_sweep.py"
-assert fsm_path.is_file(), f"missing {fsm_path}"
-assert sweep_path.is_file(), f"missing {sweep_path}"
-
-# Register in sys.modules before exec_module (safe for any future dataclasses too).
-spec = importlib.util.spec_from_file_location("skip_phase_fsm", fsm_path)
-mod = importlib.util.module_from_spec(spec)
-sys.modules["skip_phase_fsm"] = mod
-assert spec.loader is not None
-spec.loader.exec_module(mod)
-
-assert "click_bell" in mod.TASK_PHASE_TARGETS, "click_bell missing from TASK_PHASE_TARGETS"
-batch = os.environ.get("SKIP_PHASE_BATCH", "batch1")
-if batch == "batch2":
-    expected = [
-        "pick_dual_bottles", "pick_diverse_bottles", "place_a2b_left", "place_a2b_right",
-        "move_can_pot", "stack_bowls_three", "handover_block", "lift_pot", "press_stapler",
-        "turn_switch",
-    ]
-else:
-    expected = [
-        "handover_mic", "hanging_mug", "move_stapler_pad", "place_bread_basket",
-        "place_mouse_pad", "place_object_basket", "put_bottles_dustbin", "stack_blocks_three",
-        "stack_blocks_two", "click_bell",
-    ]
-missing = [t for t in expected if t not in mod.TASK_PHASE_TARGETS]
-assert not missing, f"TASK_PHASE_TARGETS missing: {missing}"
-fsm = mod.SkipPhaseFSM(task_name=expected[0], near_thresh_m=0.10)
-assert fsm.template == "pick_place"
-assert fsm.near_thresh_m == 0.10, fsm.near_thresh_m
-fsm2 = mod.SkipPhaseFSM(task_name="click_bell")
-assert fsm2.template == "contact"
-fsm2.set_task_name("handover_mic")
-assert fsm2.template == "pick_place"
-# deploy_policy budget knob must exist in env for sweep child jobs
-assert os.environ.get("SKIP_PHASE_MAX_CONSECUTIVE_SKIPS") == "1"
-assert os.environ.get("OVCR_DIAG_MODE") == "baseline"
-print(
-    f"skip_phase_fsm ok | batch={batch} tasks={len(expected)} "
-    f"| near={fsm.near_thresh_m} max_consec_skip=1 OVCR=baseline"
-)
+assert int(os.environ.get("FIXED_CPP", "0")) == 1, os.environ.get("FIXED_CPP")
+assert int(os.environ.get("FIXED_ACTION_HORIZON", "0")) == 64
+ckpt = Path(os.environ["SKIP_PHASE_CKPT"])
+assert ckpt.is_file(), ckpt
+print(f"he_adapt preflight ok | arm={os.environ.get('HE_ADAPT_ARM')} hydra={os.environ.get('EVAL_HYDRA_TASK')} ckpt={ckpt}")
 PY
 else
     echo "WARNING: cannot create policy symlink (src or parent missing)"
@@ -666,11 +900,15 @@ echo "FINAL OUTPUT_DIR=${OUTPUT_DIR}"
 echo "EVAL CKPT=${SKIP_PHASE_CKPT}"
 echo "EVAL STATS=${SKIP_PHASE_DATASET_STATS}"
 
-# ---------- 只跑 skip_phase（ft ckpt）；baseline 用 MAIN-2 released 结果 ----------
+# ---------- He-adapt: ah64/cpp1/always；task yaml 决定 chunk=8 或 32；禁止 reuse 旧 baseline ----------
 export SKIP_PHASE_OUTPUT_DIR="${OUTPUT_DIR}"
+export FIXED_CPP
+export FIXED_ACTION_HORIZON
+export EVAL_HYDRA_TASK
+export VIDEO_DIT_MODE=baseline
 SWEEP_PY="${AHA_WAM_CODE_DIR}/experiments/robotwin/run_skip_phase_sweep.py"
-echo "launch: ${SWEEP_PY} batch=${SKIP_PHASE_BATCH} modes=${EVAL_MODES[*]} ckpt=${SKIP_PHASE_CKPT}"
-echo "NOTE: baseline = prior MAIN-2 released ckpt (not re-run). This job only evaluates skip_phase with ft ckpt."
+echo "launch: ${SWEEP_PY} arm=${HE_ADAPT_ARM} ah=${FIXED_ACTION_HORIZON} cpp=${FIXED_CPP} hydra=${EVAL_HYDRA_TASK} modes=${EVAL_MODES[*]} tasks=${#SKIP_PHASE_TASKS[@]} ckpt=${SKIP_PHASE_CKPT}"
+echo "NOTE: compare .../he8_adapt_always_30eps vs .../he32_adapt_always_30eps on same platform. Released-16 is a reference bar only."
 "${PYTHON}" -u "${SWEEP_PY}" \
     --output_dir "${OUTPUT_DIR}" \
     --num_episodes "${NUM_EPISODES}" \

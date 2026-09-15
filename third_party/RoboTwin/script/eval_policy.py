@@ -133,6 +133,15 @@ def main(usr_args):
     args["task_config"] = task_config
     args["ckpt_setting"] = ckpt_setting
 
+    # Success-only eval: skip mp4 / observer frames (policy RGB cameras still render).
+    # ROBOTWIN_EVAL_VIDEO_LOG=0|false|off  or  =1|true|on
+    _vid_env = os.environ.get("ROBOTWIN_EVAL_VIDEO_LOG", "").strip().lower()
+    if _vid_env in {"0", "false", "no", "off"}:
+        args["eval_video_log"] = False
+    elif _vid_env in {"1", "true", "yes", "on"}:
+        args["eval_video_log"] = True
+    print(f"eval_video_log={args.get('eval_video_log')} (env ROBOTWIN_EVAL_VIDEO_LOG={_vid_env or '<unset>'})")
+
     embodiment_type = args.get("embodiment")
     embodiment_config_path = os.path.join(CONFIGS_PATH, "_embodiment_config.yml")
 
@@ -343,9 +352,13 @@ def eval_policy(task_name,
             instruction = f"{args['task_name'].replace('_', ' ')}"
         TASK_ENV.set_instruction(instruction=instruction)  # set language instruction
 
+        # Always define episode_idx (used by analysis logs). Video path may be None
+        # when ROBOTWIN_EVAL_VIDEO_LOG=0 — previously episode_idx was only set inside
+        # the video branch, causing UnboundLocalError after the first Success!/Fail!.
+        episode_idx = int(getattr(TASK_ENV, "test_num", 0) or 0)
+
         current_video_path = None
         if TASK_ENV.eval_video_path is not None:
-            episode_idx = TASK_ENV.test_num
             # Include pid so parallel jobs never collide on episodeN.mp4
             current_video_path = (
                 Path(TASK_ENV.eval_video_path) / f"episode{episode_idx}.pid{os.getpid()}.mp4"
@@ -380,6 +393,18 @@ def eval_policy(task_name,
 
         succ = False
         reset_func(model)
+        begin_fn = eval_function_decorator(policy_name, "begin_rollout_episode")
+        try:
+            begin_fn(
+                model,
+                instruction=str(instruction),
+                seed=int(now_seed) if now_seed is not None else None,
+                episode_idx=int(episode_idx),
+            )
+        except Exception as exc:
+            # Optional hook — older policies may not export begin_rollout_episode.
+            if "begin_rollout_episode" not in str(exc):
+                print(f"[WARN] begin_rollout_episode: {exc}", flush=True)
         task_state_history = []
 
         # Simple open_microwave fallback: if the door stops moving while the
@@ -513,6 +538,13 @@ def eval_policy(task_name,
             print("\033[92mSuccess!\033[0m")
         else:
             print("\033[91mFail!\033[0m")
+
+        try:
+            finish_fn = eval_function_decorator(policy_name, "finish_rollout_episode")
+            finish_fn(model, success=bool(succ))
+        except Exception as exc:
+            if "finish_rollout_episode" not in str(exc):
+                print(f"[WARN] finish_rollout_episode: {exc}", flush=True)
 
         timing_getter = getattr(model, "get_timing_rollout", None)
         step_log_getter = getattr(model, "get_step_log", None)

@@ -320,11 +320,46 @@ class MplibPlanner:
     ):
         super().__init__()
         ta.setup_logging("CRITICAL")  # hide logging
+        import os
 
         links = [link.get_name() for link in robot_entity.get_links()]
         joints = [joint.get_name() for joint in robot_entity.get_active_joints()]
 
-        if scene is None:
+        # Under lavapipe (no nvidia-modeset), both SapienPlanningWorld and mplib.Planner
+        # SIGSEGV during construction (return code -11). Policy qpos eval does not need
+        # RRT; it only needs plan_grippers (init open) + TOPP (or linear fallback) in
+        # take_action. Use a pure-Python stub on lavapipe / ROBOTWIN_MPLIB_STUB=1.
+        _vk = os.environ.get("AHAWAM_VULKAN_MODE", "").strip().lower()
+        _stub = (
+            _vk in {"lavapipe", "lvp", "cpu", "software"}
+            or os.environ.get("ROBOTWIN_MPLIB_STUB", "").strip().lower() in {"1", "true", "yes", "on"}
+        )
+        _no_sapien_world = (
+            _stub
+            or scene is None
+            or os.environ.get("SAPIEN_DISABLE_RAYTRACING", "").strip().lower() in {"1", "true", "yes", "on"}
+            or os.environ.get("ROBOTWIN_MPLIB_NO_SAPIEN_WORLD", "").strip().lower() in {"1", "true", "yes", "on"}
+        )
+
+        self.planner_type = planner_type
+        self.plan_step_lim = 2500
+
+        if _stub:
+            print(
+                f"[MplibPlanner] STUB (no native mplib) vk={_vk or 'n/a'} "
+                f"move_group={move_group} — linear TOPP / linspace grippers",
+                flush=True,
+            )
+            self.planner = None
+            self.TOPP = self._stub_topp
+            return
+
+        if _no_sapien_world:
+            print(
+                f"[MplibPlanner] using mplib.Planner (no SapienPlanningWorld) "
+                f"vk={_vk or 'n/a'} move_group={move_group}",
+                flush=True,
+            )
             self.planner = mplib.Planner(
                 urdf=urdf_path,
                 srdf=srdf_path,
@@ -335,16 +370,50 @@ class MplibPlanner:
             )
             self.planner.set_base_pose(robot_origion_pose)
         else:
+            print(f"[MplibPlanner] SapienPlanningWorld move_group={move_group}", flush=True)
             planning_world = SapienPlanningWorld(scene, [robot_entity])
             self.planner = SapienPlanner(planning_world, move_group)
 
-        self.planner_type = planner_type
-        self.plan_step_lim = 2500
         self.TOPP = self.planner.TOPP
 
+    @staticmethod
+    def _stub_topp(path, time_step, verbose=False):
+        """Linear joint-space interpolate; replaces native mplib TOPP under lavapipe."""
+        path = np.asarray(path, dtype=float)
+        if path.ndim == 1:
+            path = path.reshape(1, -1)
+        if path.shape[0] == 0:
+            empty = np.zeros((0, 0))
+            return np.array([]), empty, empty, None, 0.0
+        if path.shape[0] == 1:
+            pos = path.copy()
+            vel = np.zeros_like(pos)
+            times = np.array([0.0])
+            return times, pos, vel, None, 0.0
+        # Match take_action fallback density (~50 steps per waypoint segment).
+        parts = []
+        for i in range(path.shape[0] - 1):
+            n = 50
+            seg = np.linspace(path[i], path[i + 1], n + 1, dtype=float)
+            parts.append(seg if i == 0 else seg[1:])
+        pos = np.vstack(parts)
+        vel = np.gradient(pos, axis=0) / float(time_step)
+        times = np.arange(pos.shape[0], dtype=float) * float(time_step)
+        duration = float(times[-1]) if times.size else 0.0
+        return times, pos, vel, None, duration
+
     def show_info(self):
+        if self.planner is None:
+            print("joint_limits <stub>", "joint_acc_limits <stub>")
+            return
         print("joint_limits", self.planner.joint_limits)
         print("joint_acc_limits", self.planner.joint_acc_limits)
+
+    def update_point_cloud(self, *args, **kwargs):
+        if self.planner is None:
+            return
+        if hasattr(self.planner, "update_point_cloud"):
+            return self.planner.update_point_cloud(*args, **kwargs)
 
     def plan_pose(
         self,
@@ -358,6 +427,10 @@ class MplibPlanner:
     ):
         result = {}
         result["status"] = "Fail"
+        if self.planner is None:
+            if log:
+                print(f"\n {arms_tag} arm planning failed (stub) !")
+            return result
 
         now_try_times = 1
         while result["status"] != "Success" and now_try_times < try_times:
@@ -399,6 +472,10 @@ class MplibPlanner:
         Interpolative planning with screw motion.
         Will not avoid collision and will fail if the path contains collision.
         """
+        if self.planner is None:
+            if log:
+                print(f"\n {arms_tag} arm planning failed (stub) !")
+            return {"status": "Fail"}
         result = self.planner.plan_screw(
             goal_pose=target_pose,
             current_qpos=now_qpos,

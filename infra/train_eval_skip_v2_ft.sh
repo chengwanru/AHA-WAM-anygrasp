@@ -1,17 +1,18 @@
 #!/usr/bin/env bash
 # =============================================================================
-# EVAL MAIN-2 style: baseline + skip_phase (ah64/cpp2), RELEASED ckpt
-# Same runtime stack as train_eval_skip_v2_ft / random_skip:
-#   Python>=3.10, PyPI sapien, abs Vulkan ICD, render-fail = hard error
+# EVAL after SKIP_V2 finetune — skip_phase ONLY (ah64/cpp2), finetuned ckpt
+# Baseline = reuse MAIN-2 released-ckpt numbers (do NOT re-run baseline).
+# Task set = MAIN-2 tasks that already have baseline in EXPERIMENT_RESULTS_SUMMARY
+#   (19 tasks × 40 ep; put_bottles_dustbin excluded — no MAIN-2 baseline row).
+# Checkpoint: skip_v2_ft_8x10h/checkpoints/weights/step_004000.pt
 # =============================================================================
-# 提交：算法包 cwr_wulan_algorithm
-#   batch1: train_skip_phase.sh
-#   batch2: train_skip_phase_batch2.sh
-# 挂载：wulann + wulann2 + wulann3 + wulann4；超时 ≥18h（baseline+skip）
+# 提交：算法包 cwr_wulan_algorithm，入口选 train_eval_skip_v2_ft.sh
+# batch2：入口选 train_eval_skip_v2_ft_batch2.sh（另一台 8 卡，另外 10 个 MAIN-2 任务）
+# 挂载：wulann + wulann2 + wulann3 + wulann4；lavapipe 硬扛时超时建议 ≥48h（JOB_TIMEOUT_S=172800）
 set -euo pipefail
-# Requires AHA-WAM-anygrasp: eval_robotwin_single abs-ICD + test_render exit(1) + sweep job_complete fix
 
-echo "train_skip_phase.sh revision: 2026-09-09-main2-nort-v6"
+echo "train_eval_skip_v2_ft.sh revision: 2026-09-09-ft-skiponly-lavapipe-v12-epidx"
+# ===================== 写死配置（你不用 set）=====================
 SKIP_PHASE_BATCH="${SKIP_PHASE_BATCH:-batch1}"
 SMOKE=0
 SMOKE_NUM_EPISODES=1
@@ -21,26 +22,30 @@ export FIXED_CPP=2
 export SKIP_PHASE_NEAR_THRESH_M=0.10
 export SKIP_PHASE_MAX_CONSECUTIVE_SKIPS=1
 export OVCR_DIAG_MODE=baseline
+# Success-only: skip mp4 encode/write (policy RGB still needed for VLA)
+export ROBOTWIN_EVAL_VIDEO_LOG=0
 export SKIP_PHASE_BATCH
 
-# Released ckpt
-export SKIP_PHASE_CKPT="${SKIP_PHASE_CKPT:-/opt/huawei/dataset/cwr_dataset_wulann/AHA-WAM-anygrasp/checkpoints/AHA-WAM-RoboTwin2.0/robotwin_ahawam.pt}"
-export SKIP_PHASE_DATASET_STATS="${SKIP_PHASE_DATASET_STATS:-/opt/huawei/dataset/cwr_dataset_wulann/AHA-WAM-anygrasp/checkpoints/AHA-WAM-RoboTwin2.0/dataset_stats.json}"
-EVAL_MODES=(baseline skip_phase)
+# Finetuned ckpt (cluster path; explore fallback applied later)
+export SKIP_PHASE_CKPT="${SKIP_PHASE_CKPT:-/opt/huawei/dataset/cwr_dataset_wulann4/aha-wam-runs/train/skip_v2_ft_8x10h/checkpoints/weights/step_004000.pt}"
+export SKIP_PHASE_DATASET_STATS="${SKIP_PHASE_DATASET_STATS:-/opt/huawei/dataset/cwr_dataset_wulann4/aha-wam-runs/train/skip_v2_ft_8x10h/dataset_stats.json}"
+# Only skip_phase: compare vs MAIN-2 released baseline / released zero-shot skip.
+EVAL_MODES=(skip_phase)
 
 case "${SKIP_PHASE_BATCH}" in
 batch1)
-    HARDCODED_OUTPUT_DIR="/opt/huawei/dataset/cwr_dataset_wulann4/aha-wam-runs/robotwin/video_dit_skip_phase_smoke_v2"
-    HARDCODED_OUTPUT_DIR_FULL="/opt/huawei/dataset/cwr_dataset_wulann4/aha-wam-runs/robotwin/video_dit_skip_phase_40eps_v2"
+    # 9 tasks with MAIN-2 baseline (exclude put_bottles_dustbin — not in D.2 table)
+    HARDCODED_OUTPUT_DIR="/opt/huawei/dataset/cwr_dataset_wulann4/aha-wam-runs/robotwin/video_dit_skip_phase_smoke_v12_lvp_ft"
+    HARDCODED_OUTPUT_DIR_FULL="/opt/huawei/dataset/cwr_dataset_wulann4/aha-wam-runs/robotwin/video_dit_skip_phase_40eps_v12_lvp_ft"
     SKIP_PHASE_TASKS=(
         handover_mic hanging_mug move_stapler_pad place_bread_basket place_mouse_pad
         place_object_basket stack_blocks_three stack_blocks_two click_bell
     )
     ;;
 batch2)
-    echo "train_skip_phase.sh revision: 2026-09-09-main2-nort-v6-batch2"
-    HARDCODED_OUTPUT_DIR="/opt/huawei/dataset/cwr_dataset_wulann4/aha-wam-runs/robotwin/video_dit_skip_phase_smoke_v2_batch2"
-    HARDCODED_OUTPUT_DIR_FULL="/opt/huawei/dataset/cwr_dataset_wulann4/aha-wam-runs/robotwin/video_dit_skip_phase_40eps_v2_batch2"
+    echo "train_eval_skip_v2_ft.sh revision: 2026-09-09-ft-skiponly-lavapipe-v12-epidx-batch2"
+    HARDCODED_OUTPUT_DIR="/opt/huawei/dataset/cwr_dataset_wulann4/aha-wam-runs/robotwin/video_dit_skip_phase_smoke_v12_lvp_ft_batch2"
+    HARDCODED_OUTPUT_DIR_FULL="/opt/huawei/dataset/cwr_dataset_wulann4/aha-wam-runs/robotwin/video_dit_skip_phase_40eps_v12_lvp_ft_batch2"
     SKIP_PHASE_TASKS=(
         pick_dual_bottles pick_diverse_bottles place_a2b_left place_a2b_right move_can_pot
         stack_bowls_three handover_block lift_pot press_stapler turn_switch
@@ -139,9 +144,10 @@ fi
 echo "SMOKE=${SMOKE} NUM_EPISODES=${NUM_EPISODES}"
 echo "NNPU=${NNPU} NNODES=${NNODES} NODE_RANK=${NODE_RANK} MASTER_ADDR=${MASTER_ADDR}"
 echo "OUTPUT_DIR=${OUTPUT_DIR}"
-# 40 eps ≈ 6h+；默认 12h，避免跑到 38/40 被杀掉
-export JOB_TIMEOUT_S="${JOB_TIMEOUT_S:-64800}"
+# lavapipe 全量 19×40 很慢；默认 48h，平台超时请 ≥ JOB_TIMEOUT_S
+export JOB_TIMEOUT_S="${JOB_TIMEOUT_S:-172800}"  # 48h — lavapipe CPU render
 echo "JOB_TIMEOUT_S=${JOB_TIMEOUT_S}"
+echo "EVAL_MODES=${EVAL_MODES[*]} VIDEO will follow VIDEO_DIT_MODE=skip_phase per sweep child"
 
 # ---------- pip：华为源默认；sapien 等缺包时再走 PyPI ----------
 export PIP_INDEX_URL="http://repo.myhuaweicloud.com/repository/pypi/simple"
@@ -443,14 +449,29 @@ EOF
     fi
     echo "Vulkan: lavapipe (方案B software) ICD=${LVP_ICD} SO=${LVP_SO:-?}"
     if [[ "${SMOKE}" != "1" ]]; then
-        echo "WARNING: FULL eval on lavapipe is VERY slow (CPU render). Prefer SMOKE=1 first."
+        echo "WARNING: FULL eval on lavapipe is VERY slow (CPU render)."
+        echo "WARNING: expect multi-x wall time vs GPU Vulkan; watch first episode ETA in sweep_master.log."
+        echo "WARNING: platform timeout should be >= JOB_TIMEOUT_S (ft default 48h / random 24h)."
     fi
 fi
 export AHAWAM_VULKAN_MODE
+
+# lavapipe: drop NVIDIA userspace GL/Vulkan stubs (they segfault on URDF without modeset)
 if [[ "${AHAWAM_VULKAN_MODE}" == "lavapipe" ]]; then
-    # RoboTwin _base_task defaults to ray-tracing+oidn; lavapipe segfaults on that path.
     export SAPIEN_DISABLE_RAYTRACING=1
+    export ROBOTWIN_MPLIB_NO_SAPIEN_WORLD=1
+    export ROBOTWIN_MPLIB_STUB=1
+    _new_ld=""
+    IFS=':' read -r -a _ld_parts <<< "${LD_LIBRARY_PATH:-}"
+    for _p in "${_ld_parts[@]}"; do
+        [[ -z "${_p}" ]] && continue
+        [[ "${_p}" == *nvidia-driver-libs* ]] && continue
+        _new_ld="${_new_ld:+${_new_ld}:}${_p}"
+    done
+    export LD_LIBRARY_PATH="/usr/lib/x86_64-linux-gnu${_new_ld:+:${_new_ld}}"
+    echo "lavapipe: stripped nvidia-driver-libs from LD_LIBRARY_PATH"
 fi
+
 echo "AHAWAM_VULKAN_MODE=${AHAWAM_VULKAN_MODE}"
 echo "SAPIEN_DISABLE_RAYTRACING=${SAPIEN_DISABLE_RAYTRACING:-0}"
 echo "SAPIEN_VULKAN_LIBRARY_PATH=${SAPIEN_VULKAN_LIBRARY_PATH:-<empty>}"
@@ -535,7 +556,7 @@ print(f"asset ok: {tc}")
 emb = Path(os.environ["AHA_WAM_CODE_DIR"]) / "third_party/RoboTwin/assets/embodiments/aloha-agilex"
 assert emb.is_dir(), f"missing embodiment assets: {emb}"
 print(f"asset ok: {emb}")
-print(f"EVAL CKPT (released): {ckpt}")
+print(f"EVAL CKPT (skip_v2_ft): {ckpt}")
 
 # RoboTwin: same import path as eval_policy.py + all task modules + policy bridge
 rt = Path(os.environ["AHA_WAM_CODE_DIR"]) / "third_party/RoboTwin"
@@ -565,15 +586,47 @@ import generate_episode_instructions  # noqa: F401
 import deploy_policy  # noqa: F401
 print("generate_episode_instructions + deploy_policy: ok")
 
-# Sapien renderer smoke (nvidia or lavapipe)
+# Sapien renderer smoke — match RoboTwin setup_scene (no RT, no shadow on lavapipe)
 try:
+    print("preflight SAPIEN_DISABLE_RAYTRACING=", os.environ.get("SAPIEN_DISABLE_RAYTRACING"))
+    print("preflight ROBOTWIN_EVAL_VIDEO_LOG=", os.environ.get("ROBOTWIN_EVAL_VIDEO_LOG"))
     renderer = sapien.render.SapienRenderer()
     print("SapienRenderer: ok mode=", os.environ.get("AHAWAM_VULKAN_MODE"))
-    scene = sapien.Scene()
-    print("sapien.Scene: ok")
+    engine = sapien.Engine()
+    engine.set_renderer(renderer)
+    scene = engine.create_scene(sapien.SceneConfig())
+    print("create_scene: ok")
+    scene.add_ground(0)
+    scene.set_ambient_light([0.5, 0.5, 0.5])
+    # Must match _base_task lavapipe path: shadow=False (shadow=True SEGVs on lavapipe)
+    scene.add_directional_light([0, 0.5, -1], [0.5, 0.5, 0.5], shadow=False)
+    scene.add_point_light([1, 0, 1.8], [1, 1, 1], shadow=False)
+    print("lights shadow=False: ok")
+    # Same crash site as eval: aloha dual-arm URDF under lavapipe (+ bad LD path)
+    urdf = Path(os.environ["AHA_WAM_CODE_DIR"]) / (
+        "third_party/RoboTwin/assets/embodiments/aloha-agilex/urdf/arx5_description_isaac.urdf"
+    )
+    if not urdf.is_file():
+        # fallback common names
+        cand = list((Path(os.environ["AHA_WAM_CODE_DIR"]) / "third_party/RoboTwin/assets/embodiments/aloha-agilex").rglob("*.urdf"))
+        urdf = cand[0] if cand else None
+    if urdf is None or not Path(urdf).is_file():
+        raise FileNotFoundError("aloha urdf missing for preflight")
+    print("preflight URDF load:", urdf)
+    rt_root = Path(os.environ["AHA_WAM_CODE_DIR"]) / "third_party/RoboTwin"
+    _cwd = os.getcwd()
+    os.chdir(rt_root)
+    try:
+        loader = scene.create_urdf_loader()
+        loader.fix_root_link = True
+        ent = loader.load(str(urdf))
+        print("preflight URDF load: ok", type(ent))
+    finally:
+        os.chdir(_cwd)
+    print("sapien.Scene: ok (lavapipe-safe preflight incl. URDF)")
 except Exception as e:
     import glob
-    print("ERROR: SapienRenderer failed:", repr(e))
+    print("ERROR: SapienRenderer/scene preflight failed:", repr(e))
     print("AHAWAM_VULKAN_MODE=", os.environ.get("AHAWAM_VULKAN_MODE"))
     print("NVIDIA_DRIVER_CAPABILITIES=", os.environ.get("NVIDIA_DRIVER_CAPABILITIES"))
     print("VK_ICD_FILENAMES=", os.environ.get("VK_ICD_FILENAMES"))
@@ -635,9 +688,10 @@ if batch == "batch2":
         "turn_switch",
     ]
 else:
+    # Must match SKIP_PHASE_TASKS batch1 (MAIN-2 baseline rows; no put_bottles_dustbin)
     expected = [
         "handover_mic", "hanging_mug", "move_stapler_pad", "place_bread_basket",
-        "place_mouse_pad", "place_object_basket", "put_bottles_dustbin", "stack_blocks_three",
+        "place_mouse_pad", "place_object_basket", "stack_blocks_three",
         "stack_blocks_two", "click_bell",
     ]
 missing = [t for t in expected if t not in mod.TASK_PHASE_TARGETS]

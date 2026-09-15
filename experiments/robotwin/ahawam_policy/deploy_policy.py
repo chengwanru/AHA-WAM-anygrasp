@@ -209,10 +209,18 @@ class WorldActionRobotWinPolicy:
         self.step_count = 0
         self._episode_prefilled = False
         self.video_dit_mode = os.environ.get("VIDEO_DIT_MODE", "baseline").lower()
-        if self.video_dit_mode not in {"baseline", "skip_approach", "skip_all", "skip_phase"}:
+        if self.video_dit_mode not in {
+            "baseline",
+            "skip_approach",
+            "skip_all",
+            "skip_phase",
+            "skip_phase_proxy",
+            "random_skip",
+        }:
             raise ValueError(
                 f"Unsupported VIDEO_DIT_MODE: {self.video_dit_mode}. "
-                "Expected one of: baseline, skip_approach, skip_all, skip_phase."
+                "Expected one of: baseline, skip_approach, skip_all, skip_phase, "
+                "skip_phase_proxy, random_skip."
             )
 
         # OVCR diagnostic probes (algorithm unchanged; inference-path switches only).
@@ -240,13 +248,27 @@ class WorldActionRobotWinPolicy:
         )
         self._skip_phase_consecutive_skips = 0
         self._skip_phase_fsm = None
-        if self.video_dit_mode == "skip_phase":
+        # random_skip: phase-agnostic Bernoulli eligibility + same consecutive budget as skip_phase.
+        # RANDOM_SKIP_P=1.0 + max_consec=1 ⇒ alternate skip/prefill (uniform under same budget rule).
+        self.random_skip_p = float(os.environ.get("RANDOM_SKIP_P", "1.0"))
+        self._random_skip_consecutive_skips = 0
+        self._random_skip_last_info: Optional[Dict[str, Any]] = None
+        self._random_skip_rng = np.random.RandomState(
+            int(os.environ.get("RANDOM_SKIP_SEED", "0"))
+        )
+        self.skip_phase_place_progress = float(
+            os.environ.get("SKIP_PHASE_PLACE_PROGRESS", "0.85")
+        )
+        self._proxy_last_info: Optional[Dict[str, Any]] = None
+        self._proxy_debug: Dict[str, Any] = {}
+        if self.video_dit_mode in {"skip_phase", "skip_phase_proxy", "random_skip"}:
             # Skip path relies on OVCR to edit stale video KV; never run with OVCR off.
             if self.ovcr_diag_mode != "baseline":
                 raise ValueError(
-                    f"VIDEO_DIT_MODE=skip_phase requires OVCR_DIAG_MODE=baseline "
+                    f"VIDEO_DIT_MODE={self.video_dit_mode} requires OVCR_DIAG_MODE=baseline "
                     f"(got {self.ovcr_diag_mode!r}); skipped prefills must use OVCR."
                 )
+        if self.video_dit_mode == "skip_phase":
             try:
                 from .skip_phase_fsm import SkipPhaseFSM
             except ImportError:
@@ -280,6 +302,19 @@ class WorldActionRobotWinPolicy:
             self._timing_rollout[f"chunk_{chunk_idx + 1}_s"] = 0.0
             self._timing_rollout[f"chunk_{chunk_idx + 1}_calls"] = 0.0
         self._step_log: list[dict[str, Any]] = []
+        self._rollout_recorder = None
+        self._rollout_last_obs: Optional[Dict[str, Any]] = None
+        try:
+            from .rollout_recorder import maybe_make_recorder
+        except ImportError:
+            from rollout_recorder import maybe_make_recorder  # type: ignore
+        self._rollout_recorder = maybe_make_recorder(self.task_name)
+        if self._rollout_recorder is not None:
+            logger.info(
+                "Rollout recording enabled → %s (task=%s)",
+                self._rollout_recorder.root,
+                self.task_name,
+            )
 
         logger.info(
             "Initialized WorldActionRobotWinPolicy | ckpt=%s | stats=%s | horizon=%d | chunk=%d | "
@@ -544,6 +579,55 @@ class WorldActionRobotWinPolicy:
             return False
         return True
 
+    def _proxy_proprio_vector(self, observation: Optional[Dict[str, Any]]) -> Optional[np.ndarray]:
+        """14-d RoboTwin proprio from eval obs (top-level or nested joint_action)."""
+        if observation is None:
+            return None
+        joint = observation.get("joint_action")
+        if not isinstance(joint, dict):
+            nested = observation.get("observation", {})
+            joint = nested.get("joint_action") if isinstance(nested, dict) else None
+        if not isinstance(joint, dict):
+            return None
+        vec = joint.get("vector")
+        if vec is None:
+            return None
+        arr = np.asarray(vec, dtype=np.float64).reshape(-1)
+        if arr.size < 14:
+            return None
+        return arr
+
+    def _proxy_skip_eligible(self, observation: Dict[str, Any], task_env: Optional[Any]) -> bool:
+        """Train-time skip_v2 proxy: gripper holding + episode progress (no TCP GT)."""
+        from ahawam.utils.skip_phase_v2_schedule import gripper_holding, proxy_eligible
+
+        vec = self._proxy_proprio_vector(observation)
+        holding = bool(
+            gripper_holding(
+                vec,
+                closed_threshold=self.skip_approach_gripper_closed_threshold,
+            )
+        ) if vec is not None else False
+        step_lim = int(getattr(task_env, "step_lim", 0) or 0) if task_env is not None else 0
+        cnt = int(getattr(task_env, "take_action_cnt", 0) or 0) if task_env is not None else 0
+        if cnt <= 0:
+            cnt = int(self.step_count)
+        progress = float(cnt) / float(max(step_lim, 1))
+        eligible = bool(
+            proxy_eligible(
+                holding=holding,
+                episode_progress=progress,
+                place_progress_thresh=self.skip_phase_place_progress,
+            )
+        )
+        self._proxy_debug = {
+            "holding": holding,
+            "episode_progress": float(progress),
+            "take_action_cnt": int(cnt),
+            "step_lim": int(step_lim),
+        }
+        return eligible
+
     def _fill_action_queue(
         self,
         observation: Dict[str, Any],
@@ -571,6 +655,31 @@ class WorldActionRobotWinPolicy:
                 skip_prefill = True
             elif self.video_dit_mode == "skip_approach" and self._episode_prefilled:
                 skip_prefill = self._is_approach_phase(observation)
+            elif self.video_dit_mode == "skip_phase_proxy" and self._episode_prefilled:
+                eligible = bool(self._proxy_skip_eligible(observation, task_env))
+                if (
+                    eligible
+                    and self._skip_phase_consecutive_skips
+                    < self.skip_phase_max_consecutive_skips
+                ):
+                    skip_prefill = True
+                    self._skip_phase_consecutive_skips += 1
+                    reason = "proxy_eligible_skip"
+                else:
+                    skip_prefill = False
+                    self._skip_phase_consecutive_skips = 0
+                    reason = (
+                        "budget_force_prefill" if eligible else "proxy_not_eligible"
+                    )
+                self._proxy_last_info = {
+                    "mode": "skip_phase_proxy",
+                    "eligible": eligible,
+                    "skip": skip_prefill,
+                    "consecutive_skips": int(self._skip_phase_consecutive_skips),
+                    "place_progress_thresh": float(self.skip_phase_place_progress),
+                    "reason": reason,
+                    **dict(getattr(self, "_proxy_debug", {}) or {}),
+                }
             elif self.video_dit_mode == "skip_phase" and self._episode_prefilled:
                 if self._skip_phase_fsm is not None:
                     eligible = bool(
@@ -601,6 +710,34 @@ class WorldActionRobotWinPolicy:
                             )
                 else:
                     skip_prefill = False
+            elif self.video_dit_mode == "random_skip" and self._episode_prefilled:
+                # Same consecutive-skip budget as skip_phase, but eligibility is
+                # phase-agnostic Bernoulli(RANDOM_SKIP_P) — no REACH/TRANSPORT/PLACE.
+                eligible = bool(self._random_skip_rng.rand() < float(self.random_skip_p))
+                if (
+                    eligible
+                    and self._random_skip_consecutive_skips
+                    < self.skip_phase_max_consecutive_skips
+                ):
+                    skip_prefill = True
+                    self._random_skip_consecutive_skips += 1
+                    reason = "random_eligible_skip"
+                else:
+                    skip_prefill = False
+                    self._random_skip_consecutive_skips = 0
+                    reason = (
+                        "budget_force_prefill"
+                        if eligible
+                        else "random_not_eligible"
+                    )
+                self._random_skip_last_info = {
+                    "mode": "random_skip",
+                    "eligible": eligible,
+                    "skip": skip_prefill,
+                    "consecutive_skips": int(self._random_skip_consecutive_skips),
+                    "p": float(self.random_skip_p),
+                    "reason": reason,
+                }
 
             if skip_prefill:
                 # Keep current video state (kv cache) and only reset the chunk
@@ -646,6 +783,7 @@ class WorldActionRobotWinPolicy:
                 observation=observation, instruction=instruction, task_env=task_env
             )
             did_inference = True
+            self._rollout_last_obs = observation
 
         if self.should_request_observation():
             logger.warning("No action generated; skip current eval step.")
@@ -660,6 +798,20 @@ class WorldActionRobotWinPolicy:
             action[6] = float(getattr(self, "gripper_override_value", 1.0))
             action[13] = float(getattr(self, "gripper_override_value", 1.0))
             self.gripper_override_steps = override_steps - 1
+        if self._rollout_recorder is not None:
+            rec_obs = observation if observation is not None else self._rollout_last_obs
+            # Within a chunk, eval may pass observation=None; refresh for accurate state/RGB.
+            if rec_obs is None or observation is None:
+                try:
+                    rec_obs = task_env.get_obs()
+                    self._rollout_last_obs = rec_obs
+                except Exception:
+                    pass
+            if rec_obs is not None:
+                try:
+                    self._rollout_recorder.record_step(rec_obs, action)
+                except Exception as exc:
+                    logger.warning("rollout record_step failed: %s", exc)
         sim_t0 = time.perf_counter() if self.timing_enabled else 0.0
         task_env.take_action(action, action_type="qpos")
         sim_dt = time.perf_counter() - sim_t0 if self.timing_enabled else 0.0
@@ -712,6 +864,10 @@ class WorldActionRobotWinPolicy:
                 pass
             if self._skip_phase_fsm is not None and self._skip_phase_fsm.last_info:
                 log_entry["skip_phase"] = dict(self._skip_phase_fsm.last_info)
+            if self._proxy_last_info is not None:
+                log_entry["skip_phase"] = dict(self._proxy_last_info)
+            if self._random_skip_last_info is not None:
+                log_entry["random_skip"] = dict(self._random_skip_last_info)
             self._step_log.append(log_entry)
 
     def get_step_log(self) -> list[dict[str, Any]]:
@@ -803,9 +959,36 @@ class WorldActionRobotWinPolicy:
         self.episode_count += 1
         self.step_count = 0
         self.reset_timing_rollout()
+        self._rollout_last_obs = None
         if self._skip_phase_fsm is not None:
             self._skip_phase_fsm.reset()
-            self._skip_phase_consecutive_skips = 0
+        self._skip_phase_consecutive_skips = 0
+        self._proxy_last_info = None
+        self._proxy_debug = {}
+        self._random_skip_consecutive_skips = 0
+        self._random_skip_last_info = None
+        # Per-episode RNG stream: seed ^ episode keeps runs reproducible but not identical.
+        self._random_skip_rng = np.random.RandomState(
+            int(os.environ.get("RANDOM_SKIP_SEED", "0")) ^ (int(self.episode_count) * 10007)
+        )
+
+    def begin_rollout_episode(
+        self,
+        *,
+        instruction: str = "",
+        seed: Optional[int] = None,
+        episode_idx: Optional[int] = None,
+    ) -> None:
+        if self._rollout_recorder is None:
+            return
+        self._rollout_recorder.start_episode(
+            instruction=instruction, seed=seed, episode_idx=episode_idx
+        )
+
+    def finish_rollout_episode(self, *, success: bool) -> None:
+        if self._rollout_recorder is None:
+            return
+        self._rollout_recorder.finish_episode(success=bool(success))
 
 
 def encode_obs(observation: Optional[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
@@ -913,3 +1096,15 @@ def eval(TASK_ENV, model, observation: Optional[Dict[str, Any]]):
 
 def reset_model(model):
     model.reset()
+
+
+def begin_rollout_episode(model, **kwargs):
+    fn = getattr(model, "begin_rollout_episode", None)
+    if callable(fn):
+        fn(**kwargs)
+
+
+def finish_rollout_episode(model, *, success: bool):
+    fn = getattr(model, "finish_rollout_episode", None)
+    if callable(fn):
+        fn(success=bool(success))

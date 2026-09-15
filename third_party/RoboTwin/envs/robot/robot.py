@@ -102,21 +102,26 @@ class Robot:
                                                                  ["front_right", "front_left"])[1]
 
         if self.is_dual_arm:
+            print(f"[robot] URDF load dual: {self.left_urdf_path}", flush=True)
             loader: sapien.URDFLoader = scene.create_urdf_loader()
             loader.fix_root_link = True
             self._entity = loader.load(self.left_urdf_path)
+            print("[robot] URDF load ok", flush=True)
             self.left_entity = self._entity
             self.right_entity = self._entity
         else:
             arms_dis = kwargs["embodiment_dis"]
             self.left_entity_origion_pose.p += [-arms_dis / 2, 0, 0]
             self.right_entity_origion_pose.p += [arms_dis / 2, 0, 0]
+            print(f"[robot] URDF load left: {self.left_urdf_path}", flush=True)
             left_loader: sapien.URDFLoader = scene.create_urdf_loader()
             left_loader.fix_root_link = True
             right_loader: sapien.URDFLoader = scene.create_urdf_loader()
             right_loader.fix_root_link = True
             self.left_entity = left_loader.load(self.left_urdf_path)
+            print(f"[robot] URDF load right: {self.right_urdf_path}", flush=True)
             self.right_entity = right_loader.load(self.right_urdf_path)
+            print("[robot] URDF load ok", flush=True)
 
         self.left_entity.set_root_pose(self.left_entity_origion_pose)
         self.right_entity.set_root_pose(self.right_entity_origion_pose)

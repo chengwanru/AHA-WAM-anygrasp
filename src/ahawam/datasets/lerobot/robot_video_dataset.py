@@ -56,6 +56,15 @@ class RobotVideoDataset(torch.utils.data.Dataset):
         max_action_offset: int = 0,
         action_chunk_size: int = 16,
         action_horizon: int = 0,
+        # SKIP_V2 experiment (mutually exclusive with OFFSET / max_action_offset>0)
+        skip_phase_v2_train: bool = False,
+        chunks_per_video_prefill: int = 2,
+        skip_phase_max_consecutive_skips: int = 1,
+        skip_phase_place_progress: float = 0.85,
+        skip_phase_closed_threshold: float = 0.3,
+        # CPP1 adapt (path-3): per-chunk always-refresh obs + Mot Video DiT/KV train path.
+        # Mutually exclusive with OFFSET and SKIP_V2 proxy skip.
+        cpp1_ditkv_train: bool = False,
     ):
         self.video_sample_indices = list(
             range(0, num_frames, action_video_freq_ratio)
@@ -70,22 +79,54 @@ class RobotVideoDataset(torch.utils.data.Dataset):
             raise ValueError(
                 f"`action_chunk_size` must be positive, got {action_chunk_size}"
             )
+        self.skip_phase_v2_train = bool(skip_phase_v2_train)
+        self.cpp1_ditkv_train = bool(cpp1_ditkv_train)
+        self.chunks_per_video_prefill = int(chunks_per_video_prefill)
+        self.skip_phase_max_consecutive_skips = int(skip_phase_max_consecutive_skips)
+        self.skip_phase_place_progress = float(skip_phase_place_progress)
+        self.skip_phase_closed_threshold = float(skip_phase_closed_threshold)
+        if self.skip_phase_v2_train and self.max_action_offset > 0:
+            raise ValueError(
+                "SKIP_V2 and OFFSET experiments are mutually exclusive: "
+                "set max_action_offset=0 when skip_phase_v2_train=true."
+            )
+        if self.cpp1_ditkv_train and self.max_action_offset > 0:
+            raise ValueError(
+                "CPP1_DITKV and OFFSET are mutually exclusive: "
+                "set max_action_offset=0 when cpp1_ditkv_train=true."
+            )
+        if self.cpp1_ditkv_train and self.skip_phase_v2_train:
+            raise ValueError(
+                "CPP1_DITKV and SKIP_V2 are mutually exclusive: "
+                "enable only one of cpp1_ditkv_train / skip_phase_v2_train."
+            )
+        if self.cpp1_ditkv_train and self.chunks_per_video_prefill != 1:
+            raise ValueError(
+                "cpp1_ditkv_train requires chunks_per_video_prefill=1, "
+                f"got {self.chunks_per_video_prefill}."
+            )
         self.action_horizon = (
             int(action_horizon)
             if int(action_horizon) > 0
             else int(num_frames - 1 - self.max_action_offset)
         )
         self._action_offset_enabled = self.max_action_offset > 0
-        if self._action_offset_enabled:
+        self._chunk_aligned_obs_train = (
+            self._action_offset_enabled
+            or self.skip_phase_v2_train
+            or self.cpp1_ditkv_train
+        )
+        if self._chunk_aligned_obs_train:
             if self.action_horizon <= 0:
                 raise ValueError(
-                    "`action_horizon` must be positive when action-offset sampling is enabled."
+                    "`action_horizon` must be positive when offset/skip_v2/cpp1 sampling is enabled."
                 )
             if self.action_horizon % self.action_chunk_size != 0:
                 raise ValueError(
                     f"`action_horizon` ({self.action_horizon}) must be divisible by "
                     f"`action_chunk_size` ({self.action_chunk_size})."
                 )
+        if self._action_offset_enabled:
             if self.action_horizon + self.max_action_offset > num_frames - 1:
                 raise ValueError(
                     "Offset action window exceeds sampled action horizon: "
@@ -93,6 +134,16 @@ class RobotVideoDataset(torch.utils.data.Dataset):
                     f"max_action_offset={self.max_action_offset}, "
                     f"num_frames={num_frames}."
                 )
+        if self.skip_phase_v2_train and self.action_horizon > num_frames - 1:
+            raise ValueError(
+                "SKIP_V2 action_horizon exceeds sampled action steps: "
+                f"action_horizon={self.action_horizon}, num_frames={num_frames}."
+            )
+        if self.cpp1_ditkv_train and self.action_horizon > num_frames - 1:
+            raise ValueError(
+                "CPP1_DITKV action_horizon exceeds sampled action steps: "
+                f"action_horizon={self.action_horizon}, num_frames={num_frames}."
+            )
         self._chunk_start_offsets = list(
             range(0, self.action_horizon, self.action_chunk_size)
         )
@@ -105,6 +156,10 @@ class RobotVideoDataset(torch.utils.data.Dataset):
                     for offset in range(self.max_action_offset + 1)
                     for chunk_start in self._chunk_start_offsets
                 }
+            )
+        elif self.skip_phase_v2_train or self.cpp1_ditkv_train:
+            image_sample_indices = sorted(
+                set(self.video_sample_indices) | set(self._chunk_start_offsets)
             )
         else:
             image_sample_indices = self.video_sample_indices
@@ -401,6 +456,87 @@ class RobotVideoDataset(torch.utils.data.Dataset):
             self._process_sampled_video_tensor(no_offset_video).permute(1, 0, 2, 3).contiguous(),
         )
 
+    def _estimate_episode_progress(self, sample_idx: int) -> float:
+        """Rough [0,1] progress within the LeRobot episode containing sample_idx."""
+        try:
+            dataset, local_idx = self._resolve_lerobot_dataset_for_global_index(
+                int(sample_idx)
+            )
+            item = dataset.hf_dataset[int(local_idx)]
+            ep_idx = int(item["episode_index"].item())
+            ep_from = int(dataset.episode_data_index["from"][ep_idx].item())
+            ep_to = int(dataset.episode_data_index["to"][ep_idx].item())
+            denom = max(ep_to - ep_from - 1, 1)
+            return float(np.clip((local_idx - ep_from) / denom, 0.0, 1.0))
+        except Exception:
+            return 0.5
+
+    def _build_skip_v2_chunk_obs_images(
+        self,
+        video: torch.Tensor,
+        *,
+        proprio: torch.Tensor,
+        sample_idx: int,
+    ) -> tuple[torch.Tensor, dict]:
+        """SKIP_V2: per-chunk stills under cpp + consecutive-skip budget (proxy phase)."""
+        from ahawam.utils.skip_phase_v2_schedule import (
+            build_skip_v2_chunk_sources_from_proprio,
+        )
+
+        prop_np = proprio.detach().cpu().numpy()
+        sources, eligible, skipped = build_skip_v2_chunk_sources_from_proprio(
+            prop_np,
+            action_horizon=int(self.action_horizon),
+            action_chunk_size=int(self.action_chunk_size),
+            chunks_per_video_prefill=int(self.chunks_per_video_prefill),
+            max_consecutive_skips=int(self.skip_phase_max_consecutive_skips),
+            episode_progress=self._estimate_episode_progress(int(sample_idx)),
+            place_progress_thresh=float(self.skip_phase_place_progress),
+            closed_threshold=float(self.skip_phase_closed_threshold),
+        )
+        frame_offsets = [
+            int(self._chunk_start_offsets[int(src)]) for src in sources
+        ]
+        selected = self._select_sampled_video_offsets(video, frame_offsets)
+        chunk_obs = (
+            self._process_sampled_video_tensor(selected)
+            .permute(1, 0, 2, 3)
+            .contiguous()
+        )
+        meta = {
+            "sources": sources,
+            "eligible": eligible,
+            "skipped": skipped,
+            "skip_ratio": float(sum(skipped) / max(len(skipped), 1)),
+        }
+        return chunk_obs, meta
+
+    def _build_cpp1_ditkv_chunk_obs_images(
+        self,
+        video: torch.Tensor,
+    ) -> tuple[torch.Tensor, dict]:
+        """CPP1 adapt: each action chunk refreshes from its own chunk-start frame."""
+        num_chunks = len(self._chunk_start_offsets)
+        sources = list(range(num_chunks))
+        frame_offsets = [
+            int(self._chunk_start_offsets[int(src)]) for src in sources
+        ]
+        selected = self._select_sampled_video_offsets(video, frame_offsets)
+        chunk_obs = (
+            self._process_sampled_video_tensor(selected)
+            .permute(1, 0, 2, 3)
+            .contiguous()
+        )
+        meta = {
+            "sources": sources,
+            "eligible": [False] * num_chunks,
+            "skipped": [False] * num_chunks,
+            "skip_ratio": 0.0,
+            "cpp": 1,
+            "mode": "cpp1_ditkv_always",
+        }
+        return chunk_obs, meta
+
     def _resolve_lerobot_dataset_for_global_index(self, sample_idx: int):
         start_idx = 0
         for dataset in self.lerobot_dataset.multi_dataset._datasets:
@@ -553,9 +689,36 @@ class RobotVideoDataset(torch.utils.data.Dataset):
         action_offset = self._sample_action_offset()
         chunk_obs_images = None
         chunk_obs_images_no_offset = None
+        skip_phase_v2_meta = None
+        cpp1_ditkv_meta = None
         if self._action_offset_enabled:
             chunk_obs_images, chunk_obs_images_no_offset = self._build_chunk_obs_images(
                 video, action_offset=action_offset
+            )
+            main_positions = [
+                self._image_offset_to_sample_position[int(offset)]
+                for offset in self.video_sample_indices
+            ]
+            image_is_pad = image_is_pad[main_positions]
+            video = self._select_sampled_video_offsets(video, self.video_sample_indices)
+        elif self.skip_phase_v2_train:
+            # Actions stay aligned; only OVCR stills follow skip_v2 schedule.
+            proprio_for_sched = sample["proprio"][:-1, :]
+            chunk_obs_images, skip_phase_v2_meta = self._build_skip_v2_chunk_obs_images(
+                video,
+                proprio=proprio_for_sched,
+                sample_idx=int(sample_idx),
+            )
+            main_positions = [
+                self._image_offset_to_sample_position[int(offset)]
+                for offset in self.video_sample_indices
+            ]
+            image_is_pad = image_is_pad[main_positions]
+            video = self._select_sampled_video_offsets(video, self.video_sample_indices)
+        elif self.cpp1_ditkv_train:
+            # cpp=1 always-refresh chunk obs; Mot training_loss still runs Video DiT+KV.
+            chunk_obs_images, cpp1_ditkv_meta = self._build_cpp1_ditkv_chunk_obs_images(
+                video
             )
             main_positions = [
                 self._image_offset_to_sample_position[int(offset)]
@@ -609,6 +772,21 @@ class RobotVideoDataset(torch.utils.data.Dataset):
             data["action_offset"] = torch.tensor(action_offset, dtype=torch.long)
             data["chunk_obs_images"] = chunk_obs_images
             data["chunk_obs_images_no_offset"] = chunk_obs_images_no_offset
+        if self.skip_phase_v2_train:
+            # Do NOT set action_offset — SKIP_V2 keeps actions time-aligned.
+            data["skip_phase_v2"] = torch.tensor(1, dtype=torch.long)
+            data["chunk_obs_images"] = chunk_obs_images
+            if skip_phase_v2_meta is not None:
+                data["skip_phase_v2_skip_ratio"] = torch.tensor(
+                    float(skip_phase_v2_meta["skip_ratio"]), dtype=torch.float32
+                )
+        if self.cpp1_ditkv_train:
+            data["cpp1_ditkv"] = torch.tensor(1, dtype=torch.long)
+            data["chunk_obs_images"] = chunk_obs_images
+            if cpp1_ditkv_meta is not None:
+                data["cpp1_ditkv_skip_ratio"] = torch.tensor(
+                    float(cpp1_ditkv_meta["skip_ratio"]), dtype=torch.float32
+                )
         current_frame_index = self._get_video_rope_frame_index(sample_idx)
         data["video_current_frame_index"] = torch.tensor(
             current_frame_index, dtype=torch.long

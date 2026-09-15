@@ -54,7 +54,7 @@ class Sapien_TEST(gym.Env):
             print("\033[31m" + "Render Error" + "\033[0m")
             print("Exception:", e)
             traceback.print_exc()
-            exit()
+            sys.exit(1)
 
     def setup_scene(self, **kwargs):
         """
@@ -70,10 +70,19 @@ class Sapien_TEST(gym.Env):
         # give renderer to sapien sim
         self.engine.set_renderer(self.renderer)
 
-        sapien.render.set_camera_shader_dir("rt")
-        sapien.render.set_ray_tracing_samples_per_pixel(32)
-        sapien.render.set_ray_tracing_path_depth(8)
-        sapien.render.set_ray_tracing_denoiser("oidn")
+        _vk_mode = os.environ.get("AHAWAM_VULKAN_MODE", "nvidia").strip().lower()
+        _disable_rt = os.environ.get("SAPIEN_DISABLE_RAYTRACING", "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        _use_rt = (not _disable_rt) and (_vk_mode not in {"lavapipe", "lvp", "cpu", "software"})
+        if _use_rt:
+            sapien.render.set_camera_shader_dir("rt")
+            sapien.render.set_ray_tracing_samples_per_pixel(32)
+            sapien.render.set_ray_tracing_path_depth(8)
+            sapien.render.set_ray_tracing_denoiser("oidn")
 
         # declare sapien scene
         scene_config = sapien.SceneConfig()

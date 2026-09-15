@@ -140,8 +140,11 @@ class Base_Task(gym.Env):
 
         self.instruction = None  # for Eval
 
+        print("[init_task] create_table_and_wall...", flush=True)
         self.create_table_and_wall(table_xy_bias=table_xy_bias, table_height=0.74)
+        print("[init_task] load_robot...", flush=True)
         self.load_robot(**kwags)
+        print("[init_task] load_camera...", flush=True)
         self.load_camera(**kwags)
         self.robot.move_to_homestate()
 
@@ -151,6 +154,7 @@ class Base_Task(gym.Env):
         self.render_freq = render_freq
 
         self.robot.set_origin_endpose()
+        print("[init_task] load_actors...", flush=True)
         self.load_actors()
 
         if self.cluttered_table:
@@ -234,17 +238,36 @@ class Base_Task(gym.Env):
         # give renderer to sapien sim
         self.engine.set_renderer(self.renderer)
 
-        sapien.render.set_camera_shader_dir("rt")
-        sapien.render.set_ray_tracing_samples_per_pixel(32)
-        sapien.render.set_ray_tracing_path_depth(8)
-        sapien.render.set_ray_tracing_denoiser("oidn")
+        # Ray tracing needs a real NVIDIA Vulkan device. lavapipe (CPU) segfaults on "rt"+oidn.
+        _vk_mode = os.environ.get("AHAWAM_VULKAN_MODE", "nvidia").strip().lower()
+        _disable_rt = os.environ.get("SAPIEN_DISABLE_RAYTRACING", "").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "on",
+        }
+        _use_rt = (not _disable_rt) and (_vk_mode not in {"lavapipe", "lvp", "cpu", "software"})
+        if _use_rt:
+            sapien.render.set_camera_shader_dir("rt")
+            sapien.render.set_ray_tracing_samples_per_pixel(32)
+            sapien.render.set_ray_tracing_path_depth(8)
+            sapien.render.set_ray_tracing_denoiser("oidn")
+        else:
+            # Rasterization / default shaders — required for lavapipe headless eval.
+            print(
+                f"[setup_scene] ray tracing disabled "
+                f"(AHAWAM_VULKAN_MODE={_vk_mode}, SAPIEN_DISABLE_RAYTRACING={os.environ.get('SAPIEN_DISABLE_RAYTRACING', '')})"
+            )
 
         # declare sapien scene
+        print("[setup_scene] create_scene...", flush=True)
         scene_config = sapien.SceneConfig()
         self.scene = self.engine.create_scene(scene_config)
+        print("[setup_scene] create_scene ok", flush=True)
         # set simulation timestep
         self.scene.set_timestep(kwargs.get("timestep", 1 / 250))
         # add ground to scene
+        print("[setup_scene] add_ground...", flush=True)
         self.scene.add_ground(kwargs.get("ground_height", 0))
         # set default physical material
         self.scene.default_physical_material = self.scene.create_physical_material(
@@ -256,9 +279,15 @@ class Base_Task(gym.Env):
         self.scene.set_ambient_light(kwargs.get("ambient_light", [0.5, 0.5, 0.5]))
         # default enable shadow unless specified otherwise
         shadow = kwargs.get("shadow", True)
+        # Shadow maps are a common lavapipe segfault; disable for software Vulkan.
+        if _vk_mode in {"lavapipe", "lvp", "cpu", "software"} or _disable_rt:
+            if shadow:
+                print("[setup_scene] forcing shadow=False for lavapipe/no-RT", flush=True)
+            shadow = False
         # default spotlight angle and intensity
         direction_lights = kwargs.get("direction_lights", [[[0, 0.5, -1], [0.5, 0.5, 0.5]]])
         self.direction_light_lst = []
+        print(f"[setup_scene] add lights shadow={shadow}...", flush=True)
         for direction_light in direction_lights:
             if self.random_light:
                 direction_light[1] = [
@@ -275,6 +304,7 @@ class Base_Task(gym.Env):
             if self.random_light:
                 point_light[1] = [np.random.rand(), np.random.rand(), np.random.rand()]
             self.point_light_lst.append(self.scene.add_point_light(point_light[0], point_light[1], shadow=shadow))
+        print("[setup_scene] lights ok", flush=True)
 
         # initialize viewer with camera position and orientation
         if self.render_freq:
@@ -290,6 +320,7 @@ class Base_Task(gym.Env):
                 p=kwargs.get("camera_rpy_p", -0.8),
                 y=kwargs.get("camera_rpy_y", 2.45),
             )
+        print("[setup_scene] done", flush=True)
 
     def create_table_and_wall(self, table_xy_bias=[0, 0], table_height=0.74):
         self.table_xy_bias = table_xy_bias
@@ -409,10 +440,15 @@ class Base_Task(gym.Env):
         load aloha robot urdf file, set root pose and set joints
         """
         if not hasattr(self, "robot"):
+            print("[load_robot] Robot() / URDF load...", flush=True)
             self.robot = Robot(self.scene, self.need_topp, **kwags)
+            print("[load_robot] Robot() ok; set_planner...", flush=True)
             self.robot.set_planner(self.scene)
+            print("[load_robot] set_planner ok; init_joints...", flush=True)
             self.robot.init_joints()
+            print("[load_robot] done", flush=True)
         else:
+            print("[load_robot] reset...", flush=True)
             self.robot.reset(self.scene, self.need_topp, **kwags)
 
         for link in self.robot.left_entity.get_links():

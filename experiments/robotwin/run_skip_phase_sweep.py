@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
-"""baseline vs skip_phase sweep (fixed ah64 / cpp2, 40 eps).
+"""baseline / skip_phase / random_skip sweep (default ah64 / cpp2).
 
-Does NOT touch the ah/cpp parameter sweep. Always uses:
+Does NOT touch the ah/cpp parameter sweep grid. Defaults:
   action_horizon=64, chunks_per_video_prefill=2
-  VIDEO_DIT_MODE = baseline | skip_phase
+Override via env FIXED_ACTION_HORIZON / FIXED_CPP (e.g. cpp1 always eval).
+  VIDEO_DIT_MODE = baseline | skip_phase | skip_phase_proxy | random_skip
 
 Output (separate from robotwin_ahawam_sweep_*):
-  .../aha-wam-runs/robotwin/video_dit_skip_phase_40eps/{baseline,skip_phase}/<task>/
+  .../aha-wam-runs/robotwin/<output>/{baseline,skip_phase,random_skip}/<task>/
 """
 
 from __future__ import annotations
@@ -61,9 +62,9 @@ DEFAULT_TASKS_BATCH2 = [
 
 DEFAULT_TASKS = DEFAULT_TASKS_BATCH1
 
-# Locked to match prior skip_approach / baseline comparison (NOT the ah/cpp sweep).
-FIXED_ACTION_HORIZON = 64
-FIXED_CPP = 2
+# Default ah64/cpp2 (MAIN-2 skip line). cpp1 adapt AB eval exports FIXED_CPP=1.
+FIXED_ACTION_HORIZON = int(os.environ.get("FIXED_ACTION_HORIZON", "64"))
+FIXED_CPP = int(os.environ.get("FIXED_CPP", "2"))
 DEFAULT_MODES = ["baseline", "skip_phase"]
 
 # Approximate wall hours @ ah64_cpp2 × 40ep (from batch2×8 + measured).
@@ -129,7 +130,8 @@ def job_complete(task_dir: Path, num_episodes: int) -> bool:
     an = task_dir / "analysis"
     if an.is_dir() and len(list(an.glob("episode*_analysis.json"))) >= int(num_episodes):
         return True
-    return (task_dir / "_result_random.txt").exists()
+    # Do NOT treat bare _result_random.txt as complete — render crashes can leave it empty.
+    return False
 
 
 def find_reusable_baseline(task: str, num_episodes: int):
@@ -429,7 +431,29 @@ def main() -> None:
     parser.add_argument("--output_dir", type=str, default=str(DEFAULT_OUTPUT))
     parser.add_argument("--timeout_s", type=int, default=int(os.environ.get("JOB_TIMEOUT_S", "64800")))
     parser.add_argument("--kill_signal_timeout_s", type=int, default=60)
+    parser.add_argument(
+        "--ckpt",
+        type=str,
+        default=os.environ.get("SKIP_PHASE_CKPT", ""),
+        help="Optional AHA-WAM checkpoint override (also via SKIP_PHASE_CKPT).",
+    )
+    parser.add_argument(
+        "--dataset_stats_path",
+        type=str,
+        default=os.environ.get("SKIP_PHASE_DATASET_STATS", ""),
+        help="Optional dataset_stats.json override.",
+    )
+    parser.add_argument(
+        "--disable_baseline_reuse",
+        action="store_true",
+        help="Do not reuse prior ah64_cpp2 baselines (required when evaluating a new ckpt).",
+    )
     args = parser.parse_args()
+
+    ckpt_override = str(args.ckpt or "").strip()
+    stats_override = str(args.dataset_stats_path or "").strip()
+    # Custom ckpt ⇒ never reuse released-model baselines into this tree.
+    disable_reuse = bool(args.disable_baseline_reuse) or bool(ckpt_override)
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -442,15 +466,21 @@ def main() -> None:
         "action_horizon": FIXED_ACTION_HORIZON,
         "chunks_per_video_prefill": FIXED_CPP,
         "num_gpus": args.num_gpus,
-        "baseline_reuse_roots": [str(p) for p in BASELINE_REUSE_ROOTS],
+        "baseline_reuse_roots": [] if disable_reuse else [str(p) for p in BASELINE_REUSE_ROOTS],
+        "disable_baseline_reuse": disable_reuse,
+        "ckpt": ckpt_override or None,
+        "dataset_stats_path": stats_override or None,
         "skip_phase_policy": "v2",
         "skip_phase_batch": os.environ.get("SKIP_PHASE_BATCH", "batch1"),
         "skip_phase_near_thresh_m": float(os.environ.get("SKIP_PHASE_NEAR_THRESH_M", "0.10")),
+        "skip_phase_place_progress": float(os.environ.get("SKIP_PHASE_PLACE_PROGRESS", "0.85")),
         "skip_phase_max_consecutive_skips": int(
             os.environ.get("SKIP_PHASE_MAX_CONSECUTIVE_SKIPS", "1")
         ),
+        "random_skip_p": float(os.environ.get("RANDOM_SKIP_P", "1.0")),
+        "random_skip_seed": int(os.environ.get("RANDOM_SKIP_SEED", "0")),
         "ovcr_diag_mode": os.environ.get("OVCR_DIAG_MODE", "baseline"),
-        "note": "ah/cpp locked; v2=far eligible + consec skip<=1 + OVCR baseline; reuses ah64_cpp2 baselines when available",
+        "note": "ah/cpp locked; random_skip = phase-agnostic + same consec budget as skip_phase",
     }
     (output_dir / "sweep_config.json").write_text(json.dumps(cfg, indent=2), encoding="utf-8")
 
@@ -463,7 +493,9 @@ def main() -> None:
         f"tasks={len(args.tasks)} modes={args.modes} | "
         f"skip_policy=v2 near={os.environ.get('SKIP_PHASE_NEAR_THRESH_M', '0.10')} "
         f"max_consec={os.environ.get('SKIP_PHASE_MAX_CONSECUTIVE_SKIPS', '1')} "
-        f"OVCR={os.environ.get('OVCR_DIAG_MODE', 'baseline')}",
+        f"OVCR={os.environ.get('OVCR_DIAG_MODE', 'baseline')} | "
+        f"ckpt={ckpt_override or '(sim_robotwin.yaml default)'} | "
+        f"baseline_reuse={'off' if disable_reuse else 'on'}",
         master_log,
     )
     log(f"Output: {output_dir}", master_log)
@@ -475,7 +507,11 @@ def main() -> None:
         for task in args.tasks:
             task_dir = output_dir / mode / task
             reused_from = None
-            if mode == "baseline" and not job_complete(task_dir, args.num_episodes):
+            if (
+                (not disable_reuse)
+                and mode == "baseline"
+                and not job_complete(task_dir, args.num_episodes)
+            ):
                 src = find_reusable_baseline(task, args.num_episodes)
                 if src is not None:
                     link_or_copy_baseline(src, task_dir)
@@ -631,13 +667,33 @@ def main() -> None:
             env["GPU_NUMBER"] = str(gpu_id + 1)
             env["SKIP_EXPERT_CHECK"] = "1"
             env["WANDB_MODE"] = "offline"
-            env["VIDEO_DIT_MODE"] = mode  # baseline | skip_phase
+            env["VIDEO_DIT_MODE"] = mode  # baseline | skip_phase | skip_phase_proxy | random_skip
             env["SKIP_PHASE_TASK_NAME"] = task
             env["SKIP_PHASE_NEAR_THRESH_M"] = os.environ.get("SKIP_PHASE_NEAR_THRESH_M", "0.10")
+            env["SKIP_PHASE_PLACE_PROGRESS"] = os.environ.get("SKIP_PHASE_PLACE_PROGRESS", "0.85")
             env["SKIP_PHASE_MAX_CONSECUTIVE_SKIPS"] = os.environ.get(
                 "SKIP_PHASE_MAX_CONSECUTIVE_SKIPS", "1"
             )
+            env["RANDOM_SKIP_P"] = os.environ.get("RANDOM_SKIP_P", "1.0")
+            env["RANDOM_SKIP_SEED"] = os.environ.get("RANDOM_SKIP_SEED", "0")
             env["OVCR_DIAG_MODE"] = os.environ.get("OVCR_DIAG_MODE", "baseline")
+            if os.environ.get("ROLLOUT_RECORD_DIR"):
+                env["ROLLOUT_RECORD_DIR"] = os.environ["ROLLOUT_RECORD_DIR"]
+            if os.environ.get("ROLLOUT_KEEP_FAILURES"):
+                env["ROLLOUT_KEEP_FAILURES"] = os.environ["ROLLOUT_KEEP_FAILURES"]
+            # Propagate headless Vulkan mode to eval_robotwin_single → RoboTwin children.
+            if os.environ.get("AHAWAM_VULKAN_MODE"):
+                env["AHAWAM_VULKAN_MODE"] = os.environ["AHAWAM_VULKAN_MODE"]
+            if os.environ.get("VK_ICD_FILENAMES"):
+                env["VK_ICD_FILENAMES"] = os.environ["VK_ICD_FILENAMES"]
+            if os.environ.get("SAPIEN_VULKAN_LIBRARY_PATH"):
+                env["SAPIEN_VULKAN_LIBRARY_PATH"] = os.environ["SAPIEN_VULKAN_LIBRARY_PATH"]
+            if os.environ.get("__EGL_VENDOR_LIBRARY_FILENAMES"):
+                env["__EGL_VENDOR_LIBRARY_FILENAMES"] = os.environ[
+                    "__EGL_VENDOR_LIBRARY_FILENAMES"
+                ]
+            elif "AHAWAM_VULKAN_MODE" in env and env["AHAWAM_VULKAN_MODE"] == "lavapipe":
+                env.pop("__EGL_VENDOR_LIBRARY_FILENAMES", None)
             src = str(PROJECT_ROOT / "src")
             env["PYTHONPATH"] = (
                 f"{src}{os.pathsep}{env['PYTHONPATH']}" if env.get("PYTHONPATH") else src
@@ -645,12 +701,13 @@ def main() -> None:
             py_path = Path(PYTHON).resolve()
             if any(tok in str(py_path) for tok in ("/envs/", "miniconda", "anaconda", "conda")):
                 conda_bin = py_path.parent
-                conda_lib = conda_bin.parent / "lib"
+                # Prepend conda bin only; do NOT put conda lib before nvidia GL/EGL.
                 env["PATH"] = f"{conda_bin}{os.pathsep}{env.get('PATH', '')}"
-                if conda_lib.is_dir():
-                    env["LD_LIBRARY_PATH"] = (
-                        f"{conda_lib}{os.pathsep}{env.get('LD_LIBRARY_PATH', '')}"
-                    )
+            # Ensure graphics capability flag reaches RoboTwin children.
+            env.setdefault(
+                "NVIDIA_DRIVER_CAPABILITIES",
+                "compute,utility,graphics,display,video",
+            )
 
             cmd = [
                 PYTHON,
@@ -665,7 +722,20 @@ def main() -> None:
                 "EVALUATION.task_config=demo_randomized",
                 f"EVALUATION.output_dir={task_dir}",
             ]
-            log(f"[LAUNCH] {mode}/{task} on GPU{gpu_id} (ah64_cpp2)", master_log)
+            hydra_task = str(os.environ.get("EVAL_HYDRA_TASK", "")).strip()
+            if hydra_task:
+                cmd.append(f"task={hydra_task}")
+            if ckpt_override:
+                cmd.append(f"ckpt={ckpt_override}")
+            if stats_override:
+                cmd.append(f"EVALUATION.dataset_stats_path={stats_override}")
+            log(
+                f"[LAUNCH] {mode}/{task} on GPU{gpu_id} (ah{FIXED_ACTION_HORIZON}_cpp{FIXED_CPP}"
+                + (f", hydra_task={hydra_task}" if hydra_task else "")
+                + (f", ckpt={ckpt_override}" if ckpt_override else "")
+                + ")",
+                master_log,
+            )
             log_fh = open(log_file, "w", encoding="utf-8", buffering=1)
             proc = subprocess.Popen(
                 cmd,

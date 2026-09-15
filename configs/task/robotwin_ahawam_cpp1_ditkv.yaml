@@ -1,8 +1,9 @@
 # @package _global_
 # =============================================================================
-# OFFSET EXPERIMENT ONLY — temporal action/obs misalignment (max_action_offset)
-# NOT skip_phase v2. For SKIP_V2 see: robotwin_ahawam_skip_v2.yaml
-# Entrypoint: train_finetune_offset.sh → output .../train/offset_ft_*
+# CPP1_DITKV ADAPT — train under cpp=1 always-refresh + Mot Video DiT/KV path
+# =============================================================================
+# Plan §4.2a path-3. NOT skip_v2 proxy. NOT offset. NOT success-BC.
+# Eval later: ah64/cpp1 always (and cpp2 smoke check).
 # =============================================================================
 
 defaults:
@@ -10,19 +11,18 @@ defaults:
   - override /model: ahawam
   - _self_
 
-# Offset path (num_frames=97 + multi-offset obs + chunk KV) is VRAM-heavy on 80G.
-# bs=4 + accum=4 → global effective batch ≈ 4*8*4=128 (same order as old 16*8*1).
-batch_size: 4
-num_workers: 8
+batch_size: 2
+num_workers: 4
 history_aware_batching: true
+# Forward still runs Video DiT; freeze weights (Action + extras train).
+freeze_video_dit: true
 
 model:
-  # Keep true on A800-80G; false OOM'd ~77GiB with bs=16 in forward_prior_action_with_chunk_updated_kv.
   mot_checkpoint_mixed_attn: true
   action_dit_pretrained_path: path/to/ActionDiT_linear_interp_Wan22_alphascale_1024hdim.pt
-  action_horizon: 80
+  action_horizon: 64
   action_chunk_size: 16
-  max_action_offset: 15
+  max_action_offset: 0
   action_obs_downsample_factor: 1
   chunk_kv_editor_num_queries: 32
   num_history_frames: 6
@@ -30,6 +30,8 @@ model:
   video_rope_frame_stride: ${data.train.action_video_freq_ratio}
   loss:
     lambda_action_prior: 1.0
+    # Action adapt under DiT+KV; do not retrain video denoising.
+    lambda_video: 0.0
 
 data:
   train:
@@ -37,37 +39,45 @@ data:
       - path/to/robotwin2.0
     pretrained_norm_stats: path/to/dataset_stats.json
     text_embedding_cache_dir: path/to/text_embeds_cache/robotwin
-    num_frames: 97
-    max_action_offset: ${model.max_action_offset}
+    num_frames: 65
+    max_action_offset: 0
     action_chunk_size: ${model.action_chunk_size}
     action_horizon: ${model.action_horizon}
+    skip_phase_v2_train: false
+    cpp1_ditkv_train: true
+    chunks_per_video_prefill: 1
+    num_history_frames: ${model.num_history_frames}
   val:
     dataset_dirs:
       - path/to/robotwin2.0
     pretrained_norm_stats: path/to/dataset_stats.json
     text_embedding_cache_dir: path/to/text_embeds_cache/robotwin
-    num_frames: 97
-    max_action_offset: ${model.max_action_offset}
+    num_frames: 65
+    max_action_offset: 0
     action_chunk_size: ${model.action_chunk_size}
     action_horizon: ${model.action_horizon}
+    skip_phase_v2_train: false
+    cpp1_ditkv_train: true
+    chunks_per_video_prefill: 1
+    num_history_frames: ${model.num_history_frames}
 
-output_dir: path/to/checkpoints/robotwin_offset/runs/train/${hydra:runtime.choices.task}-${now:%Y-%m-%d}_${now:%H-%M-%S}
+output_dir: path/to/checkpoints/robotwin_cpp1_ditkv/runs/train/${hydra:runtime.choices.task}-${now:%Y-%m-%d}_${now:%H-%M-%S}
 
 wandb:
-  enabled: true
+  enabled: false
   workspace: null
   project: ahawam
-  name: robotwin_ahawam_offset
+  name: robotwin_ahawam_cpp1_ditkv
   group: null
-  mode: online
+  mode: offline
 
 lr_scheduler_type: "cosine"
 learning_rate: 5e-5
 num_epochs: 5
 max_steps: null
 log_every: 10
-save_every: 2500
-eval_every: 500
+save_every: 1000
+eval_every: 1000
 
 gradient_accumulation_steps: 4
 weight_decay: 1e-2
